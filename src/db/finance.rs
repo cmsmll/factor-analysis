@@ -1,7 +1,7 @@
 use rayon::prelude::*;
-use rusqlite::{Connection, OpenFlags, Result, Transaction, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, Transaction, params};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, fs, io, path::Path, sync::Arc, time::Instant};
+use std::{collections::BTreeSet, fs, io, path::Path, sync::Arc};
 use time::Date;
 
 use crate::db::parse::ParseTbf;
@@ -115,6 +115,21 @@ impl FinanceDB {
         rows.collect()
     }
 
+    /// 查询时间最新的一条财务数据。
+    pub fn query_latest(&self) -> Result<Option<Finance>> {
+        self.database
+            .query_row(include_str!("sql/finance_query_latest.sql"), [], |row| {
+                Ok(Finance {
+                    datetime: Arc::from(row.get::<_, String>(0)?),
+                    total_shares: row.get(1)?,
+                    float_shares: row.get(2)?,
+                    total_market: row.get(3)?,
+                    float_market: row.get(4)?,
+                })
+            })
+            .optional()
+    }
+
     pub fn add_data(&self, financial: &Finance) -> Result<()> {
         self.database.execute(
             include_str!("sql/finance_insert.sql"),
@@ -162,11 +177,9 @@ fn add_finance_batch(transaction: &Transaction<'_>, data: &[Finance]) -> Result<
 
 /// 解析tbf财务数据并保存（每个股票一个独立数据库）
 pub fn tbf_to_finance(input: &str, output: &str) -> io::Result<()> {
-    let total_start = Instant::now();
     fs::create_dir_all(output)
         .map_err(|e| io::Error::other(format!("创建财务输出目录失败 {output}: {e}")))?;
 
-    let parse_start = Instant::now();
     let results: Vec<_> = fs::read_dir(input)
         .map_err(|e| io::Error::other(format!("读取财务输入目录失败 {input}: {e}")))?
         .par_bridge()
@@ -192,13 +205,7 @@ pub fn tbf_to_finance(input: &str, output: &str) -> io::Result<()> {
             Ok((code, finance))
         })
         .collect::<io::Result<Vec<_>>>()?;
-    println!(
-        "tbf_to_finance 解析完成: input={input}, 文件数={}, 耗时={:?}",
-        results.len(),
-        parse_start.elapsed()
-    );
 
-    let write_start = Instant::now();
     for (code, finance) in &results {
         let db_path = Path::new(output).join(format!("{code}.db"));
         let mut db = FinanceDB::new(&db_path).map_err(|e| {
@@ -208,12 +215,6 @@ pub fn tbf_to_finance(input: &str, output: &str) -> io::Result<()> {
             io::Error::other(format!("刷新财务数据失败 {}: {e}", db_path.display()))
         })?;
     }
-    println!(
-        "tbf_to_finance 写入完成: output={output}, 数据库数={}, 耗时={:?}, 总耗时={:?}",
-        results.len(),
-        write_start.elapsed(),
-        total_start.elapsed()
-    );
 
     Ok(())
 }

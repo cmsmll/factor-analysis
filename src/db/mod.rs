@@ -174,7 +174,7 @@ fn query_market_finance(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashSet, sync::Arc};
 
     use tempfile::tempdir;
     use time::{Date, Month};
@@ -195,7 +195,7 @@ mod tests {
             SW1: "行业一".to_string(),
             SW2: "行业二".to_string(),
             SW3: "行业三".to_string(),
-            indice: vec!["测试指数".to_string()],
+            indice: HashSet::from_iter(vec!["测试指数".to_string()]),
             listing_date: "2020-01-01".to_string(),
         }
     }

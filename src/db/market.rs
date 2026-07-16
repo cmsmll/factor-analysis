@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use rusqlite::{Connection, OpenFlags, Result, Transaction, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -7,7 +7,6 @@ use std::{
     fs, io,
     path::Path,
     sync::Arc,
-    time::Instant,
 };
 use time::Date;
 
@@ -216,6 +215,26 @@ impl MarketDataDb {
         rows.collect()
     }
 
+    /// 查询时间最新的一条行情数据。
+    pub fn query_latest(&self) -> Result<Option<MarketData>> {
+        self.database
+            .query_row(include_str!("sql/market_query_latest.sql"), [], |row| {
+                Ok(MarketData {
+                    datetime: Arc::from(row.get::<_, String>(0)?),
+                    change_percent: row.get(1)?,
+                    open: row.get(2)?,
+                    close: row.get(3)?,
+                    high: row.get(4)?,
+                    low: row.get(5)?,
+                    volume: row.get(6)?,
+                    turnover: row.get(7)?,
+                    turnover_rate: row.get(8)?,
+                    is_st: row.get(9)?,
+                })
+            })
+            .optional()
+    }
+
     pub fn query_with_set(
         &self,
         start: Date,
@@ -306,12 +325,10 @@ fn add_market_batch(transaction: &Transaction<'_>, data: &[MarketData]) -> Resul
 
 /// 解析tbf数据并保存（每个股票一个独立数据库）
 pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
-    let total_start = Instant::now();
     fs::create_dir_all(output)
         .map_err(|e| io::Error::other(format!("创建行情输出目录失败 {output}: {e}")))?;
 
     // 先并行解析所有文件数据，收集到 Vec 中
-    let parse_start = Instant::now();
     let results: Vec<_> = fs::read_dir(input)
         .map_err(|e| io::Error::other(format!("读取行情输入目录失败 {input}: {e}")))?
         .par_bridge()
@@ -337,14 +354,8 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
             Ok((code, md))
         })
         .collect::<io::Result<Vec<_>>>()?;
-    println!(
-        "tbf_to_market 解析完成: input={input}, 文件数={}, 耗时={:?}",
-        results.len(),
-        parse_start.elapsed()
-    );
 
     // 每个股票独立写入各自的数据库
-    let write_start = Instant::now();
     for (code, md) in &results {
         let db_path = Path::new(output).join(format!("{code}.db"));
         let mut db = MarketDataDb::new(&db_path).map_err(|e| {
@@ -354,12 +365,6 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
             io::Error::other(format!("刷新行情数据失败 {}: {e}", db_path.display()))
         })?;
     }
-    println!(
-        "tbf_to_market 写入完成: output={output}, 数据库数={}, 耗时={:?}, 总耗时={:?}",
-        results.len(),
-        write_start.elapsed(),
-        total_start.elapsed()
-    );
 
     Ok(())
 }

@@ -3,7 +3,12 @@ use rusqlite::{
     Connection, OpenFlags, OptionalExtension, Result, Transaction, params, types::Type,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, fs, io, path::Path, sync::Arc, time::Instant};
+use std::{
+    collections::{BTreeSet, HashSet},
+    fs, io,
+    path::Path,
+    sync::Arc,
+};
 
 use crate::db::parse::ParseTbf;
 
@@ -11,16 +16,16 @@ use crate::db::parse::ParseTbf;
 #[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
-    pub exchange: String,     // 交易所
-    pub name: Arc<str>,       // 名称
-    pub code: Arc<str>,       // 代码
-    pub prov: String,         // 省份
-    pub city: String,         // 城市
-    pub SW1: String,          // 申万一级
-    pub SW2: String,          // 申万二级
-    pub SW3: String,          // 申万三级
-    pub indice: Vec<String>,  // 入选指数
-    pub listing_date: String, // 上市时间
+    pub exchange: String,        // 交易所
+    pub name: Arc<str>,          // 名称
+    pub code: Arc<str>,          // 代码
+    pub prov: String,            // 省份
+    pub city: String,            // 城市
+    pub SW1: String,             // 申万一级
+    pub SW2: String,             // 申万二级
+    pub SW3: String,             // 申万三级
+    pub indice: HashSet<String>, // 入选指数
+    pub listing_date: String,    // 上市时间
 }
 
 impl Metadata {
@@ -177,14 +182,12 @@ fn json_from_sql_error(error: serde_json::Error) -> rusqlite::Error {
 
 /// 解析tbf元数据并保存到一个数据库
 pub fn tbf_to_metadata(input: &str, output: &str) -> io::Result<()> {
-    let total_start = Instant::now();
     if let Some(parent) = Path::new(output).parent() {
         fs::create_dir_all(parent).map_err(|e| {
             io::Error::other(format!("创建元数据输出目录失败 {}: {e}", parent.display()))
         })?;
     }
 
-    let parse_start = Instant::now();
     let metadata: Vec<_> = fs::read_dir(input)
         .map_err(|e| io::Error::other(format!("读取元数据输入目录失败 {input}: {e}")))?
         .par_bridge()
@@ -202,23 +205,11 @@ pub fn tbf_to_metadata(input: &str, output: &str) -> io::Result<()> {
                 .map_err(|e| io::Error::other(format!("Metadata JSON解析失败 {display}: {e}")))
         })
         .collect::<io::Result<Vec<_>>>()?;
-    println!(
-        "tbf_to_metadata 解析完成: input={input}, 文件数={}, 耗时={:?}",
-        metadata.len(),
-        parse_start.elapsed()
-    );
 
-    let write_start = Instant::now();
     let mut db = MetadataDb::new(output)
         .map_err(|e| io::Error::other(format!("打开元数据数据库失败 {output}: {e}")))?;
     db.replace_all(&metadata)
         .map_err(|e| io::Error::other(format!("刷新元数据失败 {output}: {e}")))?;
-    println!(
-        "tbf_to_metadata 写入完成: output={output}, 记录数={}, 耗时={:?}, 总耗时={:?}",
-        metadata.len(),
-        write_start.elapsed(),
-        total_start.elapsed()
-    );
 
     Ok(())
 }
@@ -242,7 +233,7 @@ mod tests {
             SW1: "行业一".to_string(),
             SW2: "行业二".to_string(),
             SW3: "行业三".to_string(),
-            indice: vec!["测试指数".to_string()],
+            indice: HashSet::from_iter(vec!["测试指数".to_string()]),
             listing_date: "2020-01-01".to_string(),
         }
     }

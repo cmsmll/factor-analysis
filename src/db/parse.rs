@@ -67,14 +67,11 @@ impl ParseTbf {
                             res.insert(s);
                         }
                         Err(err) => {
-                            let (s, _, had_errors) = GBK.decode(err.as_bytes());
-                            if had_errors {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::InvalidData,
-                                    "TBF 数据既不是 UTF-8，也不是有效的 GBK 编码",
-                                ));
+                            let (s, _, ok) = GBK.decode(err.as_bytes());
+                            // 有些异常数据不解析
+                            if !ok {
+                                res.insert(s.to_string());
                             }
-                            res.insert(s.to_string());
                         }
                     }
                 } else if self.flag {
