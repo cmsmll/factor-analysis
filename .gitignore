@@ -1,3 +1,5 @@
 /target
 /logs
 **/dist/
+/cache
+/data
