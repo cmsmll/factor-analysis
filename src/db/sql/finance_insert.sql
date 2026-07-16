@@ -1,4 +1,4 @@
-INSERT INTO financial (
+INSERT OR REPLACE INTO financial (
     datetime,
     total_shares,
     float_shares,

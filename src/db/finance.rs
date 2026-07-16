@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use rusqlite::{Connection, Result, params};
+use rusqlite::{Connection, OpenFlags, Result, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, fs, io, path::Path, sync::Arc, time::Instant};
 use time::Date;
@@ -35,6 +35,13 @@ pub struct Finance {
 
 impl Finance {
     pub fn parse(data: BTreeSet<String>) -> io::Result<Vec<Self>> {
+        if data.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "TBF 数据中没有完整记录",
+            ));
+        }
+
         data.into_par_iter()
             .map(|m| serde_json::from_str(&m).map_err(io::Error::other))
             .collect()
@@ -57,6 +64,13 @@ pub struct FinanceDB {
 impl FinanceDB {
     pub fn new<P: AsRef<Path>>(database_path: P) -> Result<Self> {
         let database = Connection::open(database_path)?;
+
+        Ok(Self { database })
+    }
+
+    pub fn open_read_only<P: AsRef<Path>>(database_path: P) -> Result<Self> {
+        let database =
+            Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
         Ok(Self { database })
     }
@@ -116,15 +130,34 @@ impl FinanceDB {
         Ok(())
     }
 
-    pub fn add_batch(&self, data: &[Finance]) -> Result<()> {
-        self.database.execute("BEGIN TRANSACTION", [])?;
-        for financial in data {
-            self.add_data(financial)?;
-        }
-        self.database.execute("COMMIT", [])?;
-
-        Ok(())
+    pub fn add_batch(&mut self, data: &[Finance]) -> Result<()> {
+        let transaction = self.database.transaction()?;
+        add_finance_batch(&transaction, data)?;
+        transaction.commit()
     }
+
+    pub fn replace_all(&mut self, data: &[Finance]) -> Result<()> {
+        let transaction = self.database.transaction()?;
+        transaction.execute(include_str!("sql/finance_create.sql"), [])?;
+        transaction.execute("DELETE FROM financial", [])?;
+        add_finance_batch(&transaction, data)?;
+        transaction.commit()
+    }
+}
+
+fn add_finance_batch(transaction: &Transaction<'_>, data: &[Finance]) -> Result<()> {
+    let mut statement = transaction.prepare_cached(include_str!("sql/finance_insert.sql"))?;
+    for financial in data {
+        statement.execute(params![
+            financial.datetime.as_ref(),
+            financial.total_shares,
+            financial.float_shares,
+            financial.total_market,
+            financial.float_market,
+        ])?;
+    }
+
+    Ok(())
 }
 
 /// 解析tbf财务数据并保存（每个股票一个独立数据库）
@@ -168,22 +201,11 @@ pub fn tbf_to_finance(input: &str, output: &str) -> io::Result<()> {
     let write_start = Instant::now();
     for (code, finance) in &results {
         let db_path = Path::new(output).join(format!("{code}.db"));
-        let db = FinanceDB::new(&db_path).map_err(|e| {
+        let mut db = FinanceDB::new(&db_path).map_err(|e| {
             io::Error::other(format!("打开财务数据库失败 {}: {e}", db_path.display()))
         })?;
-        if db.table_exists("financial").map_err(|e| {
-            io::Error::other(format!("判断财务表是否存在失败 {}: {e}", db_path.display()))
-        })? {
-            db.clear_data().map_err(|e| {
-                io::Error::other(format!("清空财务表失败 {}: {e}", db_path.display()))
-            })?;
-        } else {
-            db.create_database().map_err(|e| {
-                io::Error::other(format!("创建财务表失败 {}: {e}", db_path.display()))
-            })?;
-        }
-        db.add_batch(finance).map_err(|e| {
-            io::Error::other(format!("写入财务数据失败 {}: {e}", db_path.display()))
+        db.replace_all(finance).map_err(|e| {
+            io::Error::other(format!("刷新财务数据失败 {}: {e}", db_path.display()))
         })?;
     }
     println!(

@@ -1,5 +1,7 @@
 use rayon::prelude::*;
-use rusqlite::{Connection, OptionalExtension, Result, params, types::Type};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Result, Transaction, params, types::Type,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, fs, io, path::Path, sync::Arc, time::Instant};
 
@@ -38,6 +40,13 @@ pub struct MetadataDb {
 impl MetadataDb {
     pub fn new<P: AsRef<Path>>(database_path: P) -> Result<Self> {
         let database = Connection::open(database_path)?;
+
+        Ok(Self { database })
+    }
+
+    pub fn open_read_only<P: AsRef<Path>>(database_path: P) -> Result<Self> {
+        let database =
+            Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
         Ok(Self { database })
     }
@@ -87,12 +96,16 @@ impl MetadataDb {
 
     pub fn add_batch(&mut self, data: &[Metadata]) -> Result<()> {
         let transaction = self.database.transaction()?;
-        for metadata in data {
-            add_metadata(&transaction, metadata)?;
-        }
-        transaction.commit()?;
+        add_metadata_batch(&transaction, data)?;
+        transaction.commit()
+    }
 
-        Ok(())
+    pub fn replace_all(&mut self, data: &[Metadata]) -> Result<()> {
+        let transaction = self.database.transaction()?;
+        transaction.execute(include_str!("sql/metadata_create.sql"), [])?;
+        transaction.execute("DELETE FROM metadata", [])?;
+        add_metadata_batch(&transaction, data)?;
+        transaction.commit()
     }
 
     pub fn query(&self, code: &str) -> Result<Option<Metadata>> {
@@ -116,12 +129,11 @@ impl MetadataDb {
     }
 }
 
-fn add_metadata(database: &Connection, metadata: &Metadata) -> Result<()> {
-    let indice = serde_json::to_string(&metadata.indice).map_err(json_to_sql_error)?;
-
-    database.execute(
-        include_str!("sql/metadata_insert.sql"),
-        params![
+fn add_metadata_batch(transaction: &Transaction<'_>, data: &[Metadata]) -> Result<()> {
+    let mut statement = transaction.prepare_cached(include_str!("sql/metadata_insert.sql"))?;
+    for metadata in data {
+        let indice = serde_json::to_string(&metadata.indice).map_err(json_to_sql_error)?;
+        statement.execute(params![
             metadata.code.as_ref(),
             metadata.exchange,
             metadata.name.as_ref(),
@@ -132,8 +144,8 @@ fn add_metadata(database: &Connection, metadata: &Metadata) -> Result<()> {
             metadata.SW3,
             indice,
             metadata.listing_date,
-        ],
-    )?;
+        ])?;
+    }
 
     Ok(())
 }
@@ -199,18 +211,8 @@ pub fn tbf_to_metadata(input: &str, output: &str) -> io::Result<()> {
     let write_start = Instant::now();
     let mut db = MetadataDb::new(output)
         .map_err(|e| io::Error::other(format!("打开元数据数据库失败 {output}: {e}")))?;
-    if db
-        .table_exists("metadata")
-        .map_err(|e| io::Error::other(format!("判断元数据表是否存在失败 {output}: {e}")))?
-    {
-        db.clear_data()
-            .map_err(|e| io::Error::other(format!("清空元数据表失败 {output}: {e}")))?;
-    } else {
-        db.create_database()
-            .map_err(|e| io::Error::other(format!("创建元数据表失败 {output}: {e}")))?;
-    }
-    db.add_batch(&metadata)
-        .map_err(|e| io::Error::other(format!("写入元数据失败 {output}: {e}")))?;
+    db.replace_all(&metadata)
+        .map_err(|e| io::Error::other(format!("刷新元数据失败 {output}: {e}")))?;
     println!(
         "tbf_to_metadata 写入完成: output={output}, 记录数={}, 耗时={:?}, 总耗时={:?}",
         metadata.len(),
@@ -219,4 +221,63 @@ pub fn tbf_to_metadata(input: &str, output: &str) -> io::Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
+    use super::*;
+
+    fn metadata(code: &str, name: &str) -> Metadata {
+        Metadata {
+            exchange: "SSE".to_string(),
+            name: Arc::from(name),
+            code: Arc::from(code),
+            prov: "上海".to_string(),
+            city: "上海".to_string(),
+            SW1: "行业一".to_string(),
+            SW2: "行业二".to_string(),
+            SW3: "行业三".to_string(),
+            indice: vec!["测试指数".to_string()],
+            listing_date: "2020-01-01".to_string(),
+        }
+    }
+
+    // 测试刷新过程中任意记录写入失败时，删除操作和已写记录会一起回滚。
+    #[test]
+    fn replace_all_rolls_back_when_insert_fails() {
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("metadata.db");
+        let database = Connection::open(&database_path).unwrap();
+        database
+            .execute_batch(
+                r#"
+                CREATE TABLE metadata (
+                    code TEXT PRIMARY KEY,
+                    exchange TEXT NOT NULL,
+                    name TEXT NOT NULL CHECK(name <> 'bad'),
+                    prov TEXT NOT NULL,
+                    city TEXT NOT NULL,
+                    sw1 TEXT NOT NULL,
+                    sw2 TEXT NOT NULL,
+                    sw3 TEXT NOT NULL,
+                    indice TEXT NOT NULL,
+                    listing_date TEXT NOT NULL
+                );
+                "#,
+            )
+            .unwrap();
+        drop(database);
+
+        let mut db = MetadataDb::new(&database_path).unwrap();
+        db.add_data(&metadata("old", "old name")).unwrap();
+
+        assert!(db.replace_all(&[metadata("new", "bad")]).is_err());
+        assert!(db.query("new").unwrap().is_none());
+        assert_eq!(db.query("old").unwrap().unwrap().name.as_ref(), "old name");
+    }
 }

@@ -1,15 +1,9 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    fs,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use itertools::izip;
 use salvo::Depot;
-use time::Date;
 
-use crate::db::{Finance, MarketData, market::MarketDataDb, metadata::Metadata};
+use crate::db::{Finance, MarketData, Metadata};
 
 #[derive(Debug)]
 pub struct DataFrame {
@@ -43,60 +37,6 @@ impl DataFrame {
         &mut self,
     ) -> impl Iterator<Item = (&Contract, &mut Depot, &Metadata)> {
         izip!(self.list.iter(), self.depot.iter_mut(), self.meta.iter())
-    }
-}
-
-pub struct DataFrameBuild {
-    pub start: Date,
-    pub end: Date,
-    pub data: PathBuf,
-    pub info: PathBuf,
-    pub category: PathBuf,
-}
-
-impl DataFrameBuild {
-    pub fn load(&self) -> DataFrame {
-        let s = fs::read_to_string(&self.category).unwrap();
-        let category: Vec<String> = serde_json::from_str(&s).unwrap();
-        let data_path = Path::new(&self.data);
-        let mut result: Vec<Contract> = Vec::with_capacity(category.len());
-        let mut index_table: BTreeSet<Arc<str>> = BTreeSet::new();
-
-        for code in category {
-            let database_path = data_path.join(format!("{code}.db"));
-            let db = MarketDataDb::new(&database_path).unwrap();
-            let (item, table) = db
-                .query_with_table(self.start, self.end, &mut index_table)
-                .expect(&format!("获取数据库失败{:?}", database_path));
-
-            if !item.is_empty() {
-                result.push(Contract {
-                    start: item.first().unwrap().datetime.clone(),
-                    end: item.last().unwrap().datetime.clone(),
-                    data: item,
-                    table,
-                    finance: Vec::default(),
-                });
-            }
-        }
-
-        let start = index_table
-            .first()
-            .map(|datetime| datetime.to_string())
-            .unwrap_or_default();
-        let end = index_table
-            .last()
-            .map(|datetime| datetime.to_string())
-            .unwrap_or_default();
-
-        DataFrame {
-            start,
-            end,
-            list: result,
-            index: index_table.into_iter().collect(),
-            meta: Default::default(),
-            depot: Vec::default(),
-        }
     }
 }
 

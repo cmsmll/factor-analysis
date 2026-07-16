@@ -1,5 +1,5 @@
 use rayon::prelude::*;
-use rusqlite::{Connection, Result, params};
+use rusqlite::{Connection, OpenFlags, Result, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
@@ -13,24 +13,11 @@ use time::Date;
 
 use crate::db::parse::ParseTbf;
 
-const MARKET_QUERY_RANGE_SQL: &str = r#"
-SELECT
-    datetime,
-    change_percent,
-    open,
-    close,
-    high,
-    low,
-    volume,
-    turnover,
-    turnover_rate,
-    is_st
-FROM market_data
-WHERE datetime >= ?1 AND datetime < ?2
-ORDER BY datetime;
-"#;
-
 /// 行情数据
+pub type MarketDataList = Vec<Arc<MarketData>>;
+pub type MarketIndexTable = HashMap<Arc<str>, usize>;
+pub type MarketQueryResult = (MarketDataList, MarketIndexTable);
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct MarketData {
     /// 日期时间（例如：2025-03-15 14:30:00）
@@ -57,11 +44,22 @@ pub struct MarketData {
 
 impl MarketData {
     pub fn parse(data: BTreeSet<String>) -> io::Result<Vec<Self>> {
-        data.into_par_iter().map(|m| serde_json::from_str(&m).map_err(io::Error::other)).collect()
+        if data.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "TBF 数据中没有完整记录",
+            ));
+        }
+
+        data.into_par_iter()
+            .map(|m| serde_json::from_str(&m).map_err(io::Error::other))
+            .collect()
     }
 
     pub fn table_header() {
-        println!("┌─────────────────────┬──────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┬──────┐");
+        println!(
+            "┌─────────────────────┬──────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┬──────┐"
+        );
         println!(
             "│ {:^18}│ {:>5}  │   开盘价  │   收盘价  │   最高价  │   最低价  │   成交量  │   成交额  │   换手率  │  ST  │",
             "时间", "涨幅"
@@ -70,11 +68,15 @@ impl MarketData {
     }
 
     pub fn table_middle() {
-        println!("├─────────────────────┼──────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼──────┤");
+        println!(
+            "├─────────────────────┼──────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼──────┤"
+        );
     }
 
     pub fn table_footer() {
-        println!("└─────────────────────┴──────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴──────┘");
+        println!(
+            "└─────────────────────┴──────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴──────┘"
+        );
     }
 
     pub fn table_display(data: &[MarketData]) {
@@ -140,15 +142,26 @@ impl MarketDataDb {
         Ok(Self { database })
     }
 
+    pub fn open_read_only<P: AsRef<Path>>(database_path: P) -> Result<Self> {
+        let database =
+            Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+
+        Ok(Self { database })
+    }
+
     pub fn create_database(&self) -> Result<()> {
-        self.database.execute(include_str!("sql/market_create.sql"), [])?;
+        self.database
+            .execute(include_str!("sql/market_create.sql"), [])?;
 
         Ok(())
     }
 
     pub fn table_exists(&self, table_name: &str) -> Result<bool> {
-        self.database
-            .query_row(include_str!("sql/table_exists.sql"), params![table_name], |row| row.get(0))
+        self.database.query_row(
+            include_str!("sql/table_exists.sql"),
+            params![table_name],
+            |row| row.get(0),
+        )
     }
 
     pub fn clear_data(&self) -> Result<()> {
@@ -181,7 +194,9 @@ impl MarketDataDb {
         let start = start.to_string();
         let end = end.saturating_add(time::Duration::days(1)).to_string();
 
-        let mut stmt = self.database.prepare(MARKET_QUERY_RANGE_SQL)?;
+        let mut stmt = self
+            .database
+            .prepare(include_str!("sql/market_query_range.sql"))?;
 
         let rows = stmt.query_map(params![start, end], |row| {
             Ok(MarketData {
@@ -201,11 +216,18 @@ impl MarketDataDb {
         rows.collect()
     }
 
-    pub fn query_with_set(&self, start: Date, end: Date, set: &mut BTreeSet<Arc<str>>) -> Result<(Vec<Arc<MarketData>>, HashMap<Arc<str>, usize>)> {
+    pub fn query_with_set(
+        &self,
+        start: Date,
+        end: Date,
+        set: &mut BTreeSet<Arc<str>>,
+    ) -> Result<MarketQueryResult> {
         let start = start.to_string();
         let end = end.saturating_add(time::Duration::days(1)).to_string();
 
-        let mut stmt = self.database.prepare(MARKET_QUERY_RANGE_SQL)?;
+        let mut stmt = self
+            .database
+            .prepare(include_str!("sql/market_query_range.sql"))?;
 
         // 时间索引表
         let mut table = HashMap::default();
@@ -232,7 +254,10 @@ impl MarketDataDb {
             }))
         })?;
 
-        Ok((rows.collect::<Result<Vec<Arc<MarketData>>, rusqlite::Error>>()?, table))
+        Ok((
+            rows.collect::<Result<Vec<Arc<MarketData>>, rusqlite::Error>>()?,
+            table,
+        ))
     }
 
     pub fn query_with_table(
@@ -240,25 +265,50 @@ impl MarketDataDb {
         start: Date,
         end: Date,
         table: &mut BTreeSet<Arc<str>>,
-    ) -> Result<(Vec<Arc<MarketData>>, HashMap<Arc<str>, usize>)> {
+    ) -> Result<MarketQueryResult> {
         self.query_with_set(start, end, table)
     }
 
-    pub fn add_batch(&self, data: &[MarketData]) -> Result<()> {
-        self.database.execute("BEGIN TRANSACTION", [])?;
-        for md in data {
-            self.add_data(md)?;
-        }
-        self.database.execute("COMMIT", [])?;
-
-        Ok(())
+    pub fn add_batch(&mut self, data: &[MarketData]) -> Result<()> {
+        let transaction = self.database.transaction()?;
+        add_market_batch(&transaction, data)?;
+        transaction.commit()
     }
+
+    pub fn replace_all(&mut self, data: &[MarketData]) -> Result<()> {
+        let transaction = self.database.transaction()?;
+        transaction.execute(include_str!("sql/market_create.sql"), [])?;
+        transaction.execute("DELETE FROM market_data", [])?;
+        add_market_batch(&transaction, data)?;
+        transaction.commit()
+    }
+}
+
+fn add_market_batch(transaction: &Transaction<'_>, data: &[MarketData]) -> Result<()> {
+    let mut statement = transaction.prepare_cached(include_str!("sql/market_insert.sql"))?;
+    for md in data {
+        statement.execute(params![
+            md.datetime.as_ref(),
+            md.change_percent,
+            md.open,
+            md.close,
+            md.high,
+            md.low,
+            md.volume,
+            md.turnover,
+            md.turnover_rate,
+            md.is_st,
+        ])?;
+    }
+
+    Ok(())
 }
 
 /// 解析tbf数据并保存（每个股票一个独立数据库）
 pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
     let total_start = Instant::now();
-    fs::create_dir_all(output).map_err(|e| io::Error::other(format!("创建行情输出目录失败 {output}: {e}")))?;
+    fs::create_dir_all(output)
+        .map_err(|e| io::Error::other(format!("创建行情输出目录失败 {output}: {e}")))?;
 
     // 先并行解析所有文件数据，收集到 Vec 中
     let parse_start = Instant::now();
@@ -266,11 +316,14 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("读取行情输入目录失败 {input}: {e}")))?
         .par_bridge()
         .map(|entry| -> io::Result<_> {
-            let entry = entry.map_err(|e| io::Error::other(format!("读取行情目录项失败 {input}: {e}")))?;
+            let entry =
+                entry.map_err(|e| io::Error::other(format!("读取行情目录项失败 {input}: {e}")))?;
             let path = entry.path();
             let code = path
                 .file_stem()
-                .ok_or_else(|| io::Error::other(format!("行情文件名缺少 stem: {}", path.display())))?
+                .ok_or_else(|| {
+                    io::Error::other(format!("行情文件名缺少 stem: {}", path.display()))
+                })?
                 .to_string_lossy()
                 .to_string();
             let display = path.display().to_string();
@@ -279,7 +332,8 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
             let data = pt
                 .parse(&path)
                 .map_err(|e| io::Error::other(format!("TBF行情边界解析失败 {display}: {e}")))?;
-            let md = MarketData::parse(data).map_err(|e| io::Error::other(format!("MarketData JSON解析失败 {display}: {e}")))?;
+            let md = MarketData::parse(data)
+                .map_err(|e| io::Error::other(format!("MarketData JSON解析失败 {display}: {e}")))?;
             Ok((code, md))
         })
         .collect::<io::Result<Vec<_>>>()?;
@@ -293,19 +347,12 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
     let write_start = Instant::now();
     for (code, md) in &results {
         let db_path = Path::new(output).join(format!("{code}.db"));
-        let db = MarketDataDb::new(&db_path).map_err(|e| io::Error::other(format!("打开行情数据库失败 {}: {e}", db_path.display())))?;
-        if db
-            .table_exists("market_data")
-            .map_err(|e| io::Error::other(format!("判断行情表是否存在失败 {}: {e}", db_path.display())))?
-        {
-            db.clear_data()
-                .map_err(|e| io::Error::other(format!("清空行情表失败 {}: {e}", db_path.display())))?;
-        } else {
-            db.create_database()
-                .map_err(|e| io::Error::other(format!("创建行情表失败 {}: {e}", db_path.display())))?;
-        }
-        db.add_batch(md)
-            .map_err(|e| io::Error::other(format!("写入行情数据失败 {}: {e}", db_path.display())))?;
+        let mut db = MarketDataDb::new(&db_path).map_err(|e| {
+            io::Error::other(format!("打开行情数据库失败 {}: {e}", db_path.display()))
+        })?;
+        db.replace_all(md).map_err(|e| {
+            io::Error::other(format!("刷新行情数据失败 {}: {e}", db_path.display()))
+        })?;
     }
     println!(
         "tbf_to_market 写入完成: output={output}, 数据库数={}, 耗时={:?}, 总耗时={:?}",
@@ -315,4 +362,53 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use tempfile::tempdir;
+    use time::{Date, Month};
+
+    use super::*;
+
+    fn date(day: u8) -> Date {
+        Date::from_calendar_date(2025, Month::January, day).unwrap()
+    }
+
+    fn market(datetime: &str, close: f64) -> MarketData {
+        MarketData {
+            datetime: Arc::from(datetime),
+            change_percent: 0.01,
+            open: close - 1.0,
+            close,
+            high: close + 1.0,
+            low: close - 2.0,
+            volume: 100.0,
+            turnover: 1_000.0,
+            turnover_rate: 0.02,
+            is_st: false,
+        }
+    }
+
+    // 测试范围查询包含 end 当天，并排除 end 的下一天。
+    #[test]
+    fn query_range_includes_end_date() {
+        let directory = tempdir().unwrap();
+        let database_path = directory.path().join("market.db");
+        let mut db = MarketDataDb::new(database_path).unwrap();
+        db.replace_all(&[
+            market("2025-01-01", 10.0),
+            market("2025-01-02", 11.0),
+            market("2025-01-03", 12.0),
+        ])
+        .unwrap();
+
+        let data = db.query(date(1), date(2)).unwrap();
+
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0].datetime.as_ref(), "2025-01-01");
+        assert_eq!(data[1].datetime.as_ref(), "2025-01-02");
+    }
 }

@@ -9,16 +9,11 @@ SELECT
     market_data.turnover,
     market_data.turnover_rate,
     market_data.is_st,
-    financial.datetime,
-    financial.total_shares,
-    financial.float_shares,
-    financial.total_market,
-    financial.float_market
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL
 FROM market_data
-LEFT JOIN financial ON financial.datetime = (
-    SELECT MAX(candidate.datetime)
-    FROM financial AS candidate
-    WHERE candidate.datetime <= market_data.datetime
-)
 WHERE market_data.datetime >= ?1 AND market_data.datetime < ?2
 ORDER BY market_data.datetime;

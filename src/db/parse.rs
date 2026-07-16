@@ -39,12 +39,16 @@ impl ParseTbf {
     /// 解析TBF数据
     /// TBF数据可能重复使用 BTreeSet 去重并排序
     pub fn parse<P: AsRef<Path>>(&mut self, path: P) -> io::Result<BTreeSet<String>> {
+        self.left.index = 0;
+        self.right.index = 0;
+        self.flag = false;
         let mut file = File::open(path)?;
         let mut temp = Vec::new();
         let mut buf = [0; 1 << 10];
         let mut res = BTreeSet::new();
 
-        while let Ok(n) = file.read(&mut buf) {
+        loop {
+            let n = file.read(&mut buf)?;
             if n == 0 {
                 break;
             }
@@ -63,10 +67,14 @@ impl ParseTbf {
                             res.insert(s);
                         }
                         Err(err) => {
-                            let (s, _, ok) = GBK.decode(err.as_bytes());
-                            if !ok {
-                                res.insert(s.to_string());
+                            let (s, _, had_errors) = GBK.decode(err.as_bytes());
+                            if had_errors {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "TBF 数据既不是 UTF-8，也不是有效的 GBK 编码",
+                                ));
                             }
+                            res.insert(s.to_string());
                         }
                     }
                 } else if self.flag {
@@ -74,6 +82,13 @@ impl ParseTbf {
                 }
             }
         }
+        if self.flag {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "TBF 数据缺少结束边界",
+            ));
+        }
+
         Ok(res)
     }
 }
@@ -85,6 +100,7 @@ pub struct Symbol {
 
 impl Symbol {
     pub fn new(data: Vec<u8>) -> Self {
+        assert!(!data.is_empty(), "TBF 边界符不能为空");
         Self { data, index: 0 }
     }
 
@@ -99,5 +115,38 @@ impl Symbol {
             self.index = 0;
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, io};
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    // 测试文件在记录中途结束时返回 UnexpectedEof，避免把不完整数据写入数据库。
+    #[test]
+    fn parse_rejects_unclosed_record() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("broken.tbf");
+        fs::write(&path, b"<begin>{\"value\":1}").unwrap();
+
+        let error = ParseTbf::new("<begin>", "</end>").parse(path).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    // 测试完整的多条记录可以被提取、去重并排序。
+    #[test]
+    fn parse_reads_complete_records() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("valid.tbf");
+        fs::write(&path, b"prefix<begin>b</end><begin>a</end><begin>b</end>").unwrap();
+
+        let data = ParseTbf::new("<begin>", "</end>").parse(path).unwrap();
+
+        assert_eq!(data.into_iter().collect::<Vec<_>>(), ["a", "b"]);
     }
 }
