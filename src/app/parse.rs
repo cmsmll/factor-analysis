@@ -61,21 +61,13 @@ fn execute_parse_task(
     task: fn(&str, &str) -> io::Result<()>,
 ) -> io::Result<()> {
     let start = Instant::now();
-    task(
-        path_as_str(input, input_name)?,
-        path_as_str(output, output_name)?,
-    )
-    .map_err(|error| io::Error::other(format!("{name}任务失败: {error}")))?;
+    task(path_as_str(input, input_name)?, path_as_str(output, output_name)?).map_err(|error| io::Error::other(format!("{name}任务失败: {error}")))?;
     println!("{name}任务完成，耗时: {:.2?}", start.elapsed());
 
     Ok(())
 }
 
 fn path_as_str<'a>(path: &'a Path, name: &str) -> io::Result<&'a str> {
-    path.to_str().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{name}不是有效的 UTF-8 路径: {}", path.display()),
-        )
-    })
+    path.to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{name}不是有效的 UTF-8 路径: {}", path.display())))
 }

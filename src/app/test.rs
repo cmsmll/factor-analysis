@@ -85,11 +85,7 @@ fn export_market(database_dir: &Path, output_path: &Path) -> io::Result<BTreeSet
     Ok(codes)
 }
 
-fn report_code_differences(
-    metadata_codes: &BTreeSet<String>,
-    finance_codes: &BTreeSet<String>,
-    market_codes: &BTreeSet<String>,
-) {
+fn report_code_differences(metadata_codes: &BTreeSet<String>, finance_codes: &BTreeSet<String>, market_codes: &BTreeSet<String>) {
     let mut all_codes = metadata_codes.clone();
     all_codes.extend(finance_codes.iter().cloned());
     all_codes.extend(market_codes.iter().cloned());
@@ -137,10 +133,7 @@ fn stock_code(database_path: &Path) -> io::Result<String> {
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!(
-                    "数据库文件名不是有效的股票代码: {}",
-                    database_path.display()
-                ),
+                format!("数据库文件名不是有效的股票代码: {}", database_path.display()),
             )
         })
 }
@@ -174,11 +167,7 @@ mod tests {
     fn compares_database_codes() {
         let metadata_codes = BTreeSet::from(["000001".to_string(), "000002".to_string()]);
         let finance_codes = BTreeSet::from(["000001".to_string(), "000003".to_string()]);
-        let market_codes = BTreeSet::from([
-            "000001".to_string(),
-            "000002".to_string(),
-            "000003".to_string(),
-        ]);
+        let market_codes = BTreeSet::from(["000001".to_string(), "000002".to_string(), "000003".to_string()]);
         let mut all_codes = metadata_codes.clone();
         all_codes.extend(finance_codes.iter().cloned());
         all_codes.extend(market_codes.iter().cloned());
@@ -221,6 +210,7 @@ mod tests {
 
         let config = Config {
             server: ServerConfig::default(),
+            args: Default::default(),
             data: DataConfig {
                 market: directory.path().join("database/market"),
                 finance: directory.path().join("database/finance"),
@@ -241,11 +231,7 @@ mod tests {
             .unwrap()
             .query(date(), date())
             .unwrap();
-        let metadata = MetadataDb::new(&config.data.metadata)
-            .unwrap()
-            .query("000001")
-            .unwrap()
-            .unwrap();
+        let metadata = MetadataDb::new(&config.data.metadata).unwrap().query("000001").unwrap().unwrap();
 
         assert_eq!(market.len(), 1);
         assert_eq!(market[0].close, 11.0);
@@ -253,15 +239,12 @@ mod tests {
         assert_eq!(finance[0].total_shares, 100.0);
         assert_eq!(metadata.name.as_ref(), "测试股票");
 
-        TestCommand {}
-            .execute_with(&config, directory.path())
-            .unwrap();
+        TestCommand {}.execute_with(&config, directory.path()).unwrap();
 
         let metadata_output = fs::read_to_string(directory.path().join("metadata.txt")).unwrap();
         let finance_output = fs::read_to_string(directory.path().join("finance.txt")).unwrap();
         let market_output = fs::read_to_string(directory.path().join("market.txt")).unwrap();
-        let metadata_json: serde_json::Value =
-            serde_json::from_str(metadata_output.trim()).unwrap();
+        let metadata_json: serde_json::Value = serde_json::from_str(metadata_output.trim()).unwrap();
         let finance_json: serde_json::Value = serde_json::from_str(finance_output.trim()).unwrap();
         let market_json: serde_json::Value = serde_json::from_str(market_output.trim()).unwrap();
 
