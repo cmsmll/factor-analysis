@@ -62,7 +62,7 @@ pub struct QuantileData {
 }
 
 /// 每个股票当期数据
-pub struct Item {
+pub struct TempItem {
     pub name: Arc<str>, // 股票名称
     pub code: Arc<str>, // 股票代码
     pub factor: f64,    // 因子值
@@ -91,10 +91,10 @@ impl QuantileData {
     }
 
     /// 按因子值排序并切分分位，追加各分位的平均因子和收益。
-    pub fn push(&mut self, datetime: Arc<str>, mut items: Vec<Item>) {
+    pub fn push(&mut self, datetime: Arc<str>, mut items: Vec<TempItem>) {
         items.sort_by(|left, right| left.factor.total_cmp(&right.factor));
 
-        let groups: Vec<&[Item]> = if items.len() < self.count {
+        let groups: Vec<&[TempItem]> = if items.len() < self.count {
             vec![items.as_slice(); self.count]
         } else {
             let len = items.len();
@@ -123,8 +123,8 @@ impl QuantileData {
 mod tests {
     use super::*;
 
-    fn item(code: &str, factor: f64) -> Item {
-        Item {
+    fn item(code: &str, factor: f64) -> TempItem {
+        TempItem {
             name: Arc::from(format!("股票{code}")),
             code: Arc::from(code),
             factor,

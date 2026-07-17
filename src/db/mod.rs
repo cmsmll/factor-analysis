@@ -11,6 +11,7 @@ pub use finance::*;
 pub use market::*;
 pub use metadata::*;
 use rayon::prelude::*;
+
 use rusqlite::{Connection, OpenFlags, Result, params, types::Type};
 use time::{Date, format_description::well_known::Iso8601};
 
