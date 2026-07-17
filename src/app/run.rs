@@ -1,6 +1,20 @@
 use salvo::{cors::Cors, prelude::*};
+use salvo_oapi::{Info, OpenApi, Tag, swagger_ui::SwaggerUi};
 
 use crate::{CONFIG, logger::Logger, router};
+/// 根据业务路由生成 OpenAPI 文档。
+pub(crate) fn build_openapi(router: &Router) -> OpenApi {
+    OpenApi::with_info(
+        Info::new("Factor Analysis API", env!("CARGO_PKG_VERSION")).description("因子分析服务接口，包含基础数据查询、模式一因子模板和分位分析。"),
+    )
+    .tags([
+        Tag::new("系统").description("服务状态接口。"),
+        Tag::new("基础数据").description("股票池指数与行业板块数据。"),
+        Tag::new("模式一").description("按因子值排序的分位分析接口。"),
+        Tag::new("测试").description("固定参数测试接口。"),
+    ])
+    .merge_router(router)
+}
 
 /// Web 服务运行命令。
 #[derive(Debug, clap::Args)]
@@ -9,10 +23,18 @@ pub struct RunCommand {}
 impl RunCommand {
     pub(super) async fn execute(self) {
         let router = router::router().await;
+        let openapi = build_openapi(&router);
+
+        let router = router.unshift(openapi.into_router("/api-doc/openapi.json")).unshift(
+            SwaggerUi::new("/api-doc/openapi.json")
+                .title("Factor Analysis API")
+                .into_router("/swagger-ui"),
+        );
         let addr = CONFIG.socket_addr();
 
-        println!("{:?}", router);
         println!("WebService running at: http://{addr}");
+        println!("Swagger UI: http://{addr}/swagger-ui");
+        println!("OpenAPI JSON: http://{addr}/api-doc/openapi.json");
 
         let cors = Cors::permissive().into_handler();
         let acceptor = TcpListener::new(addr).bind().await;

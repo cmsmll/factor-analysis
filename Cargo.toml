@@ -10,10 +10,12 @@ crossbeam-channel = "0.5.16"
 derive_more = { version = "2.1.1", features = ["deref", "deref_mut"] }
 encoding_rs = "0.8.35"
 enum_dispatch = "0.3.13"
+hex = "0.4.3"
 percent-encoding = "2.3.2"
 rayon = "1.12.0"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
-salvo = { version = "0.95.0", features = ["cors"] }
+salvo = { git = "https://github.com/salvo-rs/salvo.git", rev = "bca7452deab644935ff50f433cf4f917b0b38960", features = ["cors"] }
+salvo-oapi = { git = "https://github.com/salvo-rs/salvo.git", rev = "bca7452deab644935ff50f433cf4f917b0b38960", features = ["swagger-ui", "time"] }
 serde = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json = { version = "1.0.150", features = ["raw_value"] }
 tempfile = "3.27.0"

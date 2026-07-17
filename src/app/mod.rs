@@ -6,6 +6,9 @@ use clap::Parser;
 
 pub use parse::ParseCommand;
 pub use run::RunCommand;
+
+#[cfg(test)]
+pub(crate) use run::build_openapi;
 pub use test::TestCommand;
 
 /// 因子分析命令行入口。

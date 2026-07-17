@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use salvo_oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::math::avg_iter;
 
 /// 收益信息
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct Profit {
     /// 用于计算收益的数据源。
     pub source: Vec<f64>,
@@ -48,28 +49,30 @@ impl Default for Profit {
 }
 
 /// 分位数据
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct QuantileData {
-    pub name: String,            // 策略名称
-    pub info: String,            // 描述信息
-    pub count: usize,            // 分位数量
-    pub factor: Vec<Vec<f64>>,   // 因子值
-    pub profit1: Vec<Profit>,    // 收益模式1: 当天收盘价买隔天收盘价卖
-    pub profit2: Vec<Profit>,    // 收益模式2: 隔天开盘价买隔天收盘价卖
-    pub profit3: Vec<Profit>,    // 收益模式3: 隔天开盘价买第三天开盘价卖
-    pub profit4: Vec<Profit>,    // 收益模式4: 隔天开盘价买第三天收盘价卖
-    pub datetime: Vec<Arc<str>>, // 日期时间
+    pub name: String,                 // 策略名称
+    pub info: String,                 // 描述信息
+    pub count: usize,                 // 分位数量
+    pub factor: Vec<Vec<f64>>,        // 因子值
+    pub turnover_rate: Vec<Vec<f64>>, // 各分位平均换手率
+    pub profit1: Vec<Profit>,         // 收益模式1: 当天收盘价买隔天收盘价卖
+    pub profit2: Vec<Profit>,         // 收益模式2: 隔天开盘价买隔天收盘价卖
+    pub profit3: Vec<Profit>,         // 收益模式3: 隔天开盘价买第三天开盘价卖
+    pub profit4: Vec<Profit>,         // 收益模式4: 隔天开盘价买第三天收盘价卖
+    pub datetime: Vec<Arc<str>>,      // 日期时间
 }
 
 /// 每个股票当期数据
 pub struct TempItem {
-    pub name: Arc<str>, // 股票名称
-    pub code: Arc<str>, // 股票代码
-    pub factor: f64,    // 因子值
-    pub profit1: f64,   // 收益模式1: 当天收盘价买隔天收盘价卖
-    pub profit2: f64,   // 收益模式2: 隔天开盘价买隔天收盘价卖
-    pub profit3: f64,   // 收益模式3: 隔天开盘价买第三天开盘价卖
-    pub profit4: f64,   // 收益模式4: 隔天开盘价买第三天收盘价卖
+    pub name: Arc<str>,     // 股票名称
+    pub code: Arc<str>,     // 股票代码
+    pub factor: f64,        // 因子值
+    pub turnover_rate: f64, // 当日换手率
+    pub profit1: f64,       // 收益模式1: 当天收盘价买隔天收盘价卖
+    pub profit2: f64,       // 收益模式2: 隔天开盘价买隔天收盘价卖
+    pub profit3: f64,       // 收益模式3: 隔天开盘价买第三天开盘价卖
+    pub profit4: f64,       // 收益模式4: 隔天开盘价买第三天收盘价卖
 }
 
 impl QuantileData {
@@ -82,6 +85,7 @@ impl QuantileData {
             info: info.into(),
             count,
             factor: vec![Vec::new(); count],
+            turnover_rate: vec![Vec::new(); count],
             profit1: vec![Profit::new(); count],
             profit2: vec![Profit::new(); count],
             profit3: vec![Profit::new(); count],
@@ -90,7 +94,7 @@ impl QuantileData {
         }
     }
 
-    /// 按因子值排序并切分分位，追加各分位的平均因子和收益。
+    /// 按因子值排序并切分分位，追加各分位的平均因子、平均换手率和收益。
     pub fn push(&mut self, datetime: Arc<str>, mut items: Vec<TempItem>) {
         items.sort_by(|left, right| left.factor.total_cmp(&right.factor));
 
@@ -104,6 +108,7 @@ impl QuantileData {
 
         for (index, group) in groups.into_iter().enumerate() {
             self.factor[index].push(avg_iter(group.iter().map(|item| item.factor)));
+            self.turnover_rate[index].push(avg_iter(group.iter().map(|item| item.turnover_rate)));
             self.profit1[index].push(avg_iter(group.iter().map(|item| item.profit1)));
             self.profit2[index].push(avg_iter(group.iter().map(|item| item.profit2)));
             self.profit3[index].push(avg_iter(group.iter().map(|item| item.profit3)));
@@ -128,6 +133,7 @@ mod tests {
             name: Arc::from(format!("股票{code}")),
             code: Arc::from(code),
             factor,
+            turnover_rate: factor * 10.0,
             profit1: factor / 100.0,
             profit2: factor / 10.0,
             profit3: -factor / 100.0,
@@ -144,12 +150,14 @@ mod tests {
         assert_eq!(data.info, "按因子从低到高分组");
         assert_eq!(data.count, 3);
         assert_eq!(data.factor.len(), 3);
+        assert_eq!(data.turnover_rate.len(), 3);
         assert_eq!(data.profit1.len(), 3);
         assert_eq!(data.profit2.len(), 3);
         assert_eq!(data.profit3.len(), 3);
         assert_eq!(data.profit4.len(), 3);
         assert!(data.datetime.is_empty());
         assert!(data.factor.iter().all(Vec::is_empty));
+        assert!(data.turnover_rate.iter().all(Vec::is_empty));
     }
 
     // 测试 push 取得 Item 所有权，按因子排序后切分并追加平均数据。
@@ -164,6 +172,7 @@ mod tests {
 
         assert_eq!(data.datetime[0].as_ref(), "2025-01-01");
         assert_eq!(data.factor, [vec![1.5], vec![3.5]]);
+        assert_eq!(data.turnover_rate, [vec![15.0], vec![35.0]]);
         assert!((data.profit1[0].source[0] - 0.015).abs() < 1e-12);
         assert!((data.profit1[1].source[0] - 0.035).abs() < 1e-12);
         assert!((data.profit2[0].source[0] - 0.15).abs() < 1e-12);
@@ -199,6 +208,7 @@ mod tests {
         data.push(Arc::from("2025-01-03"), vec![item("000002", 3.0), item("000001", 1.0)]);
 
         assert_eq!(data.factor, [vec![2.0], vec![2.0], vec![2.0], vec![2.0]]);
+        assert_eq!(data.turnover_rate, [vec![20.0], vec![20.0], vec![20.0], vec![20.0]]);
         assert!(data.profit1.iter().all(|profit| (profit.source[0] - 0.02).abs() < 1e-12));
         assert_eq!(data.datetime[0].as_ref(), "2025-01-03");
     }

@@ -24,4 +24,4 @@ use crate::{
 pub static CONFIG: LazyLock<Config> = LazyLock::new(Config::load_or_gen_default);
 pub static CACHE: LazyLock<Cache> = LazyLock::new(|| Cache::new("cache"));
 pub static DF: LazyLock<DataFrame> = LazyLock::new(|| DataFrameDb::from_config(&CONFIG).unwrap().query_all().unwrap());
-pub static LIST: LazyLock<Mutex<Vec<Box<RawValue>>>> = LazyLock::new(Default::default);
+pub static MODE1: LazyLock<Mutex<Vec<Box<RawValue>>>> = LazyLock::new(Default::default);

@@ -4,11 +4,12 @@ use salvo::{
     Depot, Request, Response, Writer, async_trait,
     http::{HeaderValue, StatusCode, StatusError, header::CONTENT_TYPE},
 };
+use salvo_oapi::{Components, EndpointOutRegister, Operation, ToSchema};
 use serde::Serialize;
 
 pub type Resp<T, E = ()> = Result<Res<T>, Res<E>>;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct Res<T = ()> {
     info: Arc<str>,
     code: u16,
@@ -29,6 +30,10 @@ impl<T> Res<T> {
             data,
         }
     }
+}
+
+impl<T> EndpointOutRegister for Res<T> {
+    fn register(_components: &mut Components, _operation: &mut Operation) {}
 }
 
 #[async_trait]

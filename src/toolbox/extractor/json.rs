@@ -9,6 +9,7 @@ use salvo::{
         headers::{ContentType, HeaderMapExt},
     },
 };
+use salvo_oapi::{Components, Content, EndpointArgRegister, Operation, RequestBody, ToSchema};
 use serde::Deserialize;
 use validator::Validate;
 
@@ -43,6 +44,18 @@ where
     }
 }
 
+impl<'de, T> EndpointArgRegister for Json<T>
+where
+    T: Deserialize<'de> + ToSchema,
+{
+    fn register(components: &mut Components, operation: &mut Operation, _arg: &str) {
+        operation.request_body = Some(
+            RequestBody::new()
+                .description("JSON 请求体。")
+                .add_content("application/json", Content::new(T::to_schema(components))),
+        );
+    }
+}
 /// 提取 JSON 请求数据并校验。
 #[derive(Debug, Deref, DerefMut)]
 pub struct VJson<T>(pub T);
@@ -60,5 +73,17 @@ where
         let data = req.parse_json().await.map_err(Res::from)?;
         validate(&data)?;
         Ok(Self(data))
+    }
+}
+impl<'de, T> EndpointArgRegister for VJson<T>
+where
+    T: Deserialize<'de> + Validate + ToSchema,
+{
+    fn register(components: &mut Components, operation: &mut Operation, _arg: &str) {
+        operation.request_body = Some(
+            RequestBody::new()
+                .description("需要通过字段校验的 JSON 请求体。")
+                .add_content("application/json", Content::new(T::to_schema(components))),
+        );
     }
 }

@@ -1,6 +1,7 @@
 use std::{any::TypeId, collections::HashSet, sync::Arc};
 
 use derive_more::{Deref, DerefMut};
+use salvo_oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use time::Date;
@@ -25,7 +26,7 @@ pub trait ArgsHandle: Serialize + 'static {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct Filter {
     /// 开始时间
     #[serde(with = "date_format")]
