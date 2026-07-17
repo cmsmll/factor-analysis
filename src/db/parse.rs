@@ -80,10 +80,7 @@ impl ParseTbf {
             }
         }
         if self.flag {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "TBF 数据缺少结束边界",
-            ));
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "TBF 数据缺少结束边界"));
         }
 
         Ok(res)

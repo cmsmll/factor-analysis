@@ -44,21 +44,14 @@ pub struct MarketData {
 impl MarketData {
     pub fn parse(data: BTreeSet<String>) -> io::Result<Vec<Self>> {
         if data.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "TBF 数据中没有完整记录",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "TBF 数据中没有完整记录"));
         }
 
-        data.into_par_iter()
-            .map(|m| serde_json::from_str(&m).map_err(io::Error::other))
-            .collect()
+        data.into_par_iter().map(|m| serde_json::from_str(&m).map_err(io::Error::other)).collect()
     }
 
     pub fn table_header() {
-        println!(
-            "┌─────────────────────┬──────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┬──────┐"
-        );
+        println!("┌─────────────────────┬──────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┬───────────┬──────┐");
         println!(
             "│ {:^18}│ {:>5}  │   开盘价  │   收盘价  │   最高价  │   最低价  │   成交量  │   成交额  │   换手率  │  ST  │",
             "时间", "涨幅"
@@ -67,15 +60,11 @@ impl MarketData {
     }
 
     pub fn table_middle() {
-        println!(
-            "├─────────────────────┼──────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼──────┤"
-        );
+        println!("├─────────────────────┼──────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼───────────┼──────┤");
     }
 
     pub fn table_footer() {
-        println!(
-            "└─────────────────────┴──────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴──────┘"
-        );
+        println!("└─────────────────────┴──────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴───────────┴──────┘");
     }
 
     pub fn table_display(data: &[MarketData]) {
@@ -142,25 +131,20 @@ impl MarketDataDb {
     }
 
     pub fn open_read_only<P: AsRef<Path>>(database_path: P) -> Result<Self> {
-        let database =
-            Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let database = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
         Ok(Self { database })
     }
 
     pub fn create_database(&self) -> Result<()> {
-        self.database
-            .execute(include_str!("sql/market_create.sql"), [])?;
+        self.database.execute(include_str!("sql/market_create.sql"), [])?;
 
         Ok(())
     }
 
     pub fn table_exists(&self, table_name: &str) -> Result<bool> {
-        self.database.query_row(
-            include_str!("sql/table_exists.sql"),
-            params![table_name],
-            |row| row.get(0),
-        )
+        self.database
+            .query_row(include_str!("sql/table_exists.sql"), params![table_name], |row| row.get(0))
     }
 
     pub fn clear_data(&self) -> Result<()> {
@@ -193,9 +177,7 @@ impl MarketDataDb {
         let start = start.to_string();
         let end = end.saturating_add(time::Duration::days(1)).to_string();
 
-        let mut stmt = self
-            .database
-            .prepare(include_str!("sql/market_query_range.sql"))?;
+        let mut stmt = self.database.prepare(include_str!("sql/market_query_range.sql"))?;
 
         let rows = stmt.query_map(params![start, end], |row| {
             Ok(MarketData {
@@ -215,6 +197,26 @@ impl MarketDataDb {
         rows.collect()
     }
 
+    /// 查询全部行情数据，结果按时间升序排列。
+    pub fn query_all(&self) -> Result<Vec<MarketData>> {
+        let mut stmt = self.database.prepare(include_str!("sql/market_query_all.sql"))?;
+        let rows = stmt.query_map([], |row| {
+            Ok(MarketData {
+                datetime: Arc::from(row.get::<_, String>(0)?),
+                change_percent: row.get(1)?,
+                open: row.get(2)?,
+                close: row.get(3)?,
+                high: row.get(4)?,
+                low: row.get(5)?,
+                volume: row.get(6)?,
+                turnover: row.get(7)?,
+                turnover_rate: row.get(8)?,
+                is_st: row.get(9)?,
+            })
+        })?;
+
+        rows.collect()
+    }
     /// 查询时间最新的一条行情数据。
     pub fn query_latest(&self) -> Result<Option<MarketData>> {
         self.database
@@ -235,18 +237,11 @@ impl MarketDataDb {
             .optional()
     }
 
-    pub fn query_with_set(
-        &self,
-        start: Date,
-        end: Date,
-        set: &mut BTreeSet<Arc<str>>,
-    ) -> Result<MarketQueryResult> {
+    pub fn query_with_set(&self, start: Date, end: Date, set: &mut BTreeSet<Arc<str>>) -> Result<MarketQueryResult> {
         let start = start.to_string();
         let end = end.saturating_add(time::Duration::days(1)).to_string();
 
-        let mut stmt = self
-            .database
-            .prepare(include_str!("sql/market_query_range.sql"))?;
+        let mut stmt = self.database.prepare(include_str!("sql/market_query_range.sql"))?;
 
         // 时间索引表
         let mut table = HashMap::default();
@@ -273,18 +268,10 @@ impl MarketDataDb {
             }))
         })?;
 
-        Ok((
-            rows.collect::<Result<Vec<Arc<MarketData>>, rusqlite::Error>>()?,
-            table,
-        ))
+        Ok((rows.collect::<Result<Vec<Arc<MarketData>>, rusqlite::Error>>()?, table))
     }
 
-    pub fn query_with_table(
-        &self,
-        start: Date,
-        end: Date,
-        table: &mut BTreeSet<Arc<str>>,
-    ) -> Result<MarketQueryResult> {
+    pub fn query_with_table(&self, start: Date, end: Date, table: &mut BTreeSet<Arc<str>>) -> Result<MarketQueryResult> {
         self.query_with_set(start, end, table)
     }
 
@@ -325,22 +312,18 @@ fn add_market_batch(transaction: &Transaction<'_>, data: &[MarketData]) -> Resul
 
 /// 解析tbf数据并保存（每个股票一个独立数据库）
 pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
-    fs::create_dir_all(output)
-        .map_err(|e| io::Error::other(format!("创建行情输出目录失败 {output}: {e}")))?;
+    fs::create_dir_all(output).map_err(|e| io::Error::other(format!("创建行情输出目录失败 {output}: {e}")))?;
 
     // 先并行解析所有文件数据，收集到 Vec 中
     let results: Vec<_> = fs::read_dir(input)
         .map_err(|e| io::Error::other(format!("读取行情输入目录失败 {input}: {e}")))?
         .par_bridge()
         .map(|entry| -> io::Result<_> {
-            let entry =
-                entry.map_err(|e| io::Error::other(format!("读取行情目录项失败 {input}: {e}")))?;
+            let entry = entry.map_err(|e| io::Error::other(format!("读取行情目录项失败 {input}: {e}")))?;
             let path = entry.path();
             let code = path
                 .file_stem()
-                .ok_or_else(|| {
-                    io::Error::other(format!("行情文件名缺少 stem: {}", path.display()))
-                })?
+                .ok_or_else(|| io::Error::other(format!("行情文件名缺少 stem: {}", path.display())))?
                 .to_string_lossy()
                 .to_string();
             let display = path.display().to_string();
@@ -349,8 +332,7 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
             let data = pt
                 .parse(&path)
                 .map_err(|e| io::Error::other(format!("TBF行情边界解析失败 {display}: {e}")))?;
-            let md = MarketData::parse(data)
-                .map_err(|e| io::Error::other(format!("MarketData JSON解析失败 {display}: {e}")))?;
+            let md = MarketData::parse(data).map_err(|e| io::Error::other(format!("MarketData JSON解析失败 {display}: {e}")))?;
             Ok((code, md))
         })
         .collect::<io::Result<Vec<_>>>()?;
@@ -358,12 +340,9 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
     // 每个股票独立写入各自的数据库
     for (code, md) in &results {
         let db_path = Path::new(output).join(format!("{code}.db"));
-        let mut db = MarketDataDb::new(&db_path).map_err(|e| {
-            io::Error::other(format!("打开行情数据库失败 {}: {e}", db_path.display()))
-        })?;
-        db.replace_all(md).map_err(|e| {
-            io::Error::other(format!("刷新行情数据失败 {}: {e}", db_path.display()))
-        })?;
+        let mut db = MarketDataDb::new(&db_path).map_err(|e| io::Error::other(format!("打开行情数据库失败 {}: {e}", db_path.display())))?;
+        db.replace_all(md)
+            .map_err(|e| io::Error::other(format!("刷新行情数据失败 {}: {e}", db_path.display())))?;
     }
 
     Ok(())
@@ -403,12 +382,8 @@ mod tests {
         let directory = tempdir().unwrap();
         let database_path = directory.path().join("market.db");
         let mut db = MarketDataDb::new(database_path).unwrap();
-        db.replace_all(&[
-            market("2025-01-01", 10.0),
-            market("2025-01-02", 11.0),
-            market("2025-01-03", 12.0),
-        ])
-        .unwrap();
+        db.replace_all(&[market("2025-01-01", 10.0), market("2025-01-02", 11.0), market("2025-01-03", 12.0)])
+            .unwrap();
 
         let data = db.query(date(1), date(2)).unwrap();
 

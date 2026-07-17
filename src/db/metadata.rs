@@ -1,7 +1,5 @@
 use rayon::prelude::*;
-use rusqlite::{
-    Connection, OpenFlags, OptionalExtension, Result, Transaction, params, types::Type,
-};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, Transaction, params, types::Type};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashSet},
@@ -30,9 +28,10 @@ pub struct Metadata {
 
 impl Metadata {
     pub fn parse_first(data: BTreeSet<String>) -> io::Result<Self> {
-        let data = data.into_iter().next().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "metadata tbf data is empty")
-        })?;
+        let data = data
+            .into_iter()
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "metadata tbf data is empty"))?;
 
         serde_json::from_str(&data).map_err(io::Error::other)
     }
@@ -50,25 +49,20 @@ impl MetadataDb {
     }
 
     pub fn open_read_only<P: AsRef<Path>>(database_path: P) -> Result<Self> {
-        let database =
-            Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let database = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
         Ok(Self { database })
     }
 
     pub fn create_database(&self) -> Result<()> {
-        self.database
-            .execute(include_str!("sql/metadata_create.sql"), [])?;
+        self.database.execute(include_str!("sql/metadata_create.sql"), [])?;
 
         Ok(())
     }
 
     pub fn table_exists(&self, table_name: &str) -> Result<bool> {
-        self.database.query_row(
-            include_str!("sql/table_exists.sql"),
-            params![table_name],
-            |row| row.get(0),
-        )
+        self.database
+            .query_row(include_str!("sql/table_exists.sql"), params![table_name], |row| row.get(0))
     }
 
     pub fn clear_data(&self) -> Result<()> {
@@ -115,18 +109,12 @@ impl MetadataDb {
 
     pub fn query(&self, code: &str) -> Result<Option<Metadata>> {
         self.database
-            .query_row(
-                include_str!("sql/metadata_query_by_code.sql"),
-                params![code],
-                metadata_from_row,
-            )
+            .query_row(include_str!("sql/metadata_query_by_code.sql"), params![code], metadata_from_row)
             .optional()
     }
 
     pub fn query_all(&self) -> Result<Vec<Metadata>> {
-        let mut stmt = self
-            .database
-            .prepare(include_str!("sql/metadata_query_all.sql"))?;
+        let mut stmt = self.database.prepare(include_str!("sql/metadata_query_all.sql"))?;
 
         let rows = stmt.query_map([], metadata_from_row)?;
 
@@ -183,17 +171,14 @@ fn json_from_sql_error(error: serde_json::Error) -> rusqlite::Error {
 /// 解析tbf元数据并保存到一个数据库
 pub fn tbf_to_metadata(input: &str, output: &str) -> io::Result<()> {
     if let Some(parent) = Path::new(output).parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            io::Error::other(format!("创建元数据输出目录失败 {}: {e}", parent.display()))
-        })?;
+        fs::create_dir_all(parent).map_err(|e| io::Error::other(format!("创建元数据输出目录失败 {}: {e}", parent.display())))?;
     }
 
     let metadata: Vec<_> = fs::read_dir(input)
         .map_err(|e| io::Error::other(format!("读取元数据输入目录失败 {input}: {e}")))?
         .par_bridge()
         .map(|entry| -> io::Result<_> {
-            let entry = entry
-                .map_err(|e| io::Error::other(format!("读取元数据目录项失败 {input}: {e}")))?;
+            let entry = entry.map_err(|e| io::Error::other(format!("读取元数据目录项失败 {input}: {e}")))?;
             let path = entry.path();
             let display = path.display().to_string();
 
@@ -201,13 +186,11 @@ pub fn tbf_to_metadata(input: &str, output: &str) -> io::Result<()> {
             let data = pt
                 .parse(&path)
                 .map_err(|e| io::Error::other(format!("TBF元数据边界解析失败 {display}: {e}")))?;
-            Metadata::parse_first(data)
-                .map_err(|e| io::Error::other(format!("Metadata JSON解析失败 {display}: {e}")))
+            Metadata::parse_first(data).map_err(|e| io::Error::other(format!("Metadata JSON解析失败 {display}: {e}")))
         })
         .collect::<io::Result<Vec<_>>>()?;
 
-    let mut db = MetadataDb::new(output)
-        .map_err(|e| io::Error::other(format!("打开元数据数据库失败 {output}: {e}")))?;
+    let mut db = MetadataDb::new(output).map_err(|e| io::Error::other(format!("打开元数据数据库失败 {output}: {e}")))?;
     db.replace_all(&metadata)
         .map_err(|e| io::Error::other(format!("刷新元数据失败 {output}: {e}")))?;
 
