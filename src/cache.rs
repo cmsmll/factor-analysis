@@ -3,23 +3,13 @@ use std::{
     fs,
     io::{self, Write},
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use bitcode::Encode;
 use serde_json::value::RawValue;
 use tempfile::Builder;
 use tokio::sync::broadcast::{self, Receiver};
-
-/// 哈希值
-pub trait HashCode: Encode {
-    fn hashcode(&self) -> Arc<str> {
-        let buf = bitcode::encode(self);
-        let res = blake3::hash(&buf);
-        Arc::from(res.to_string())
-    }
-}
 
 #[derive(Clone)]
 pub struct Cache {
@@ -67,11 +57,7 @@ impl Cache {
         self.run(args, f).await.recv().await
     }
 
-    pub async fn run(
-        &self,
-        args: Arc<str>,
-        f: impl FnOnce() -> Box<RawValue> + Send + 'static,
-    ) -> Receiver<Arc<RawValue>> {
+    pub async fn run(&self, args: Arc<str>, f: impl FnOnce() -> Box<RawValue> + Send + 'static) -> Receiver<Arc<RawValue>> {
         let mut running = self.inner.running.lock().unwrap();
         if let Some(rx) = running.get(args.as_ref()) {
             return rx.resubscribe();
@@ -87,7 +73,7 @@ impl Cache {
 
             match result {
                 Ok(json) => {
-                    if let Err(err) = Self::save(&cache.inner.directory, &args, &json) {
+                    if let Err(err) = cache.save(&args, &json) {
                         eprintln!("保存缓存 {args} 失败: {err}");
                     }
 
@@ -105,7 +91,8 @@ impl Cache {
         rx
     }
 
-    fn save(directory: &Path, args: &str, json: &RawValue) -> io::Result<()> {
+    fn save(&self, args: &str, json: &RawValue) -> io::Result<()> {
+        let directory = &self.inner.directory;
         fs::create_dir_all(directory)?;
 
         let file_path = directory.join(format!("{args}.json"));

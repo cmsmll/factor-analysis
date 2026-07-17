@@ -8,6 +8,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tempfile::Builder;
+use time::{Date, Month};
+
+use crate::toolbox::date_format;
 
 /// 当前目录下的默认配置文件名。
 pub const CONFIG_FILE: &str = "config.toml";
@@ -19,6 +22,9 @@ pub struct Config {
     /// HTTP 服务器配置。
     #[serde(default)]
     pub server: ServerConfig,
+    /// 分析参数配置。
+    #[serde(default)]
+    pub args: ArgsConfig,
     /// 数据源和数据库路径配置。
     #[serde(default)]
     pub data: DataConfig,
@@ -33,24 +39,14 @@ impl Config {
     /// 从指定路径加载 TOML 配置。
     pub fn load_from(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref();
-        let content = fs::read_to_string(path).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("读取配置文件 {} 失败: {error}", path.display()),
-            )
-        })?;
-        toml::from_str(&content).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("解析配置文件 {} 失败: {error}", path.display()),
-            )
-        })
+        let content =
+            fs::read_to_string(path).map_err(|error| io::Error::new(error.kind(), format!("读取配置文件 {} 失败: {error}", path.display())))?;
+        toml::from_str(&content).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("解析配置文件 {} 失败: {error}", path.display())))
     }
 
     /// 加载当前目录的配置；不存在时生成默认配置，其他错误打印后以状态码 0 退出。
     pub fn load_or_gen_default() -> Self {
-        Self::load_or_gen_default_at(CONFIG_FILE)
-            .unwrap_or_else(|error| exit_with_error("加载或生成配置失败", error))
+        Self::load_or_gen_default_at(CONFIG_FILE).unwrap_or_else(|error| exit_with_error("加载或生成配置失败", error))
     }
 
     /// 加载指定路径的配置；文件不存在时生成并保存默认配置。
@@ -90,12 +86,8 @@ impl Config {
             .unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
 
-        let content = toml::to_string_pretty(self).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("序列化配置文件 {} 失败: {error}", path.display()),
-            )
-        })?;
+        let content = toml::to_string_pretty(self)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("序列化配置文件 {} 失败: {error}", path.display())))?;
         let mut temp_file = Builder::new().suffix(".tmp").tempfile_in(parent)?;
         temp_file.write_all(content.as_bytes())?;
         temp_file.as_file().sync_all()?;
@@ -112,6 +104,7 @@ impl Config {
     fn default_values() -> Self {
         Self {
             server: ServerConfig::default(),
+            args: ArgsConfig::default(),
             data: DataConfig::default(),
         }
     }
@@ -141,6 +134,26 @@ impl Default for ServerConfig {
     }
 }
 
+/// 分析参数配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArgsConfig {
+    /// 开始日期。
+    #[serde(with = "date_format")]
+    pub start: Date,
+    /// 结束日期。
+    #[serde(with = "date_format")]
+    pub end: Date,
+}
+
+impl Default for ArgsConfig {
+    fn default() -> Self {
+        Self {
+            start: Date::from_calendar_date(2025, Month::January, 1).expect("默认开始日期有效"),
+            end: Date::from_calendar_date(2025, Month::December, 31).expect("默认结束日期有效"),
+        }
+    }
+}
 /// 数据库和原始 TBF 数据路径配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -190,6 +203,9 @@ mod tests {
         let actual = Config::load_from(&path).unwrap();
 
         assert!(content.contains("[server]"));
+        assert!(content.contains("[args]"));
+        assert!(content.contains("start = \"2025-01-01\""));
+        assert!(content.contains("end = \"2025-12-31\""));
         assert!(content.contains("[data]"));
         assert_eq!(actual, expected);
     }
@@ -255,8 +271,29 @@ mod tests {
         assert_eq!(config.server.addr, IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(config.data.tbf_market, Path::new("custom/market"));
         assert_eq!(config.data.finance, DataConfig::default().finance);
+        assert_eq!(config.args, ArgsConfig::default());
     }
 
+    // 测试 args 日期字符串通过公共 date_format 转换为 Date。
+    #[test]
+    fn load_parses_args_dates() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(CONFIG_FILE);
+        fs::write(
+            &path,
+            r#"
+                [args]
+                start = "2024-01-02"
+                end = "2026-06-30"
+            "#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(path).unwrap();
+
+        assert_eq!(config.args.start, Date::from_calendar_date(2024, Month::January, 2).unwrap());
+        assert_eq!(config.args.end, Date::from_calendar_date(2026, Month::June, 30).unwrap());
+    }
     // 测试重新生成默认配置会完整替换已有文件，不会留下旧字段。
     #[test]
     fn default_at_overwrites_existing_config() {
@@ -295,9 +332,6 @@ mod tests {
     fn config_builds_socket_address() {
         let config = Config::default_values();
 
-        assert_eq!(
-            config.socket_addr(),
-            "127.0.0.1:7878".parse::<SocketAddr>().unwrap()
-        );
+        assert_eq!(config.socket_addr(), "127.0.0.1:7878".parse::<SocketAddr>().unwrap());
     }
 }
