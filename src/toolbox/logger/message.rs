@@ -28,9 +28,7 @@ const BG_BLUE: &str = "\x1b[44m";
 /// 紫色背景
 const BG_PURPLE: &str = "\x1b[45m";
 
-const FMT: &[BorrowedFormatItem<'_>] = format_description!(
-    "[year repr:last_two]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:4]"
-);
+const FMT: &[BorrowedFormatItem<'_>] = format_description!("[year repr:last_two]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:4]");
 
 pub struct Message {
     pub begin: OffsetDateTime,
@@ -88,24 +86,73 @@ impl Message {
         write!(out, "{:<15} │ ", self.ip)?;
         write!(out, "{:>6} │ ", self.method)?;
         write!(out, "{} ", self.path)?;
-        write!(out, "\n{}", self.other)?;
-        writeln!(out, "\n{}", self.error)
+        if !self.other.is_empty() {
+            write!(out, "\n{}", self.other)?;
+        }
+        if !self.error.is_empty() {
+            write!(out, "\n{}", self.error)?;
+        }
+        writeln!(out)
     }
 
     pub fn write_color(&self, out: &mut impl Write) -> io::Result<()> {
         write!(out, "[{}] ", self.format())?; // 时间
         write!(out, "{YELLOW}SALVO{RESET} │ ")?; // LOGO
         write!(out, "{} {} {RESET} │ ", self.status_color(), self.status)?; // 状态吗
-        write!(
-            out,
-            "{}{:>5}ms{RESET} │ ",
-            self.elapsed_color(),
-            self.elapsed.as_millis()
-        )?; // 耗时
+        write!(out, "{}{:>5}ms{RESET} │ ", self.elapsed_color(), self.elapsed.as_millis())?; // 耗时
         write!(out, "{YELLOW}{:<15}{RESET} │ ", self.ip)?; // ip地址
         write!(out, "{} {:>6} {RESET} ", self.method_color(), self.method)?; // 访问方式
         write!(out, "{} ", self.path)?; // 访问路径
-        write!(out, "\n{YELLOW}{}{RESET}", self.other)?; // 其他信息
-        writeln!(out, "\n{RED}{}{RESET}", self.error) // 错误信息
+        if !self.other.is_empty() {
+            write!(out, "\n{YELLOW}{}{RESET}", self.other)?; // 其他信息
+        }
+        if !self.error.is_empty() {
+            write!(out, "\n{RED}{}{RESET}", self.error)?; // 错误信息
+        }
+        writeln!(out)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(other: &str, error: &str) -> Message {
+        Message {
+            begin: OffsetDateTime::UNIX_EPOCH,
+            elapsed: Duration::default(),
+            method: "GET".to_string(),
+            path: "/test".to_string(),
+            status: 200,
+            ip: "127.0.0.1".to_string(),
+            error: Arc::from(error),
+            other: Arc::from(other),
+        }
+    }
+
+    // 测试附加文本为空时，普通日志只输出主日志行和一个结束换行。
+    #[test]
+    fn write_skips_empty_text_lines() {
+        let mut output = Vec::new();
+        message("", "").write(&mut output).unwrap();
+
+        assert_eq!(output.iter().filter(|&&byte| byte == b'\n').count(), 1);
+    }
+
+    // 测试附加文本为空时，彩色日志只输出主日志行和一个结束换行。
+    #[test]
+    fn write_color_skips_empty_text_lines() {
+        let mut output = Vec::new();
+        message("", "").write_color(&mut output).unwrap();
+
+        assert_eq!(output.iter().filter(|&&byte| byte == b'\n').count(), 1);
+    }
+
+    // 测试非空附加文本仍各自占用一行，不产生额外空行。
+    #[test]
+    fn write_keeps_non_empty_text_lines() {
+        let mut output = Vec::new();
+        message("other", "error").write(&mut output).unwrap();
+
+        assert_eq!(output.iter().filter(|&&byte| byte == b'\n').count(), 3);
     }
 }

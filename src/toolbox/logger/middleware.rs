@@ -6,10 +6,7 @@ use std::{
 
 use crossbeam_channel::Sender;
 use percent_encoding::percent_decode;
-use salvo::{
-    Depot, FlowCtrl, Handler, Request, Response, async_trait, conn::SocketAddr,
-    http::header::LOCATION,
-};
+use salvo::{Depot, FlowCtrl, Handler, Request, Response, async_trait, conn::SocketAddr, http::header::LOCATION};
 
 use crate::toolbox::logger::{
     message::Message,
@@ -61,13 +58,7 @@ impl Default for Logger {
 
 #[async_trait]
 impl Handler for Logger {
-    async fn handle(
-        &self,
-        req: &mut Request,
-        depot: &mut Depot,
-        res: &mut Response,
-        ctrl: &mut FlowCtrl,
-    ) {
+    async fn handle(&self, req: &mut Request, depot: &mut Depot, res: &mut Response, ctrl: &mut FlowCtrl) {
         let begin = now();
         let started_at = Instant::now();
         let method = req.method().to_string();
@@ -82,9 +73,7 @@ impl Handler for Logger {
             },
             _ => "Unknown".to_string(),
         };
-        let mut path = percent_decode(req.uri().path().as_bytes())
-            .decode_utf8_lossy()
-            .to_string();
+        let mut path = percent_decode(req.uri().path().as_bytes()).decode_utf8_lossy().to_string();
 
         ctrl.call_next(req, depot, res).await;
 

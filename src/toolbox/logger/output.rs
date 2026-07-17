@@ -62,10 +62,7 @@ impl OutFile {
         let current_time = now();
         fs::create_dir_all(&path)?;
         let file_name = name.replace("{date}", &current_time.date().to_string());
-        let file = File::options()
-            .create(true)
-            .append(true)
-            .open(path.join(&file_name))?;
+        let file = File::options().create(true).append(true).open(path.join(&file_name))?;
         Ok(Self {
             path,
             name,
@@ -98,13 +95,8 @@ impl OutFile {
         if let Err(err) = self.delete_log_file(current_time) {
             eprintln!("日志删除失败: {err}");
         }
-        let name = self
-            .name
-            .replace("{date}", &current_time.date().to_string());
-        self.file = File::options()
-            .create(true)
-            .append(true)
-            .open(self.path.join(name))?;
+        let name = self.name.replace("{date}", &current_time.date().to_string());
+        self.file = File::options().create(true).append(true).open(self.path.join(name))?;
         self.current_date = current_time.date();
         Ok(())
     }

@@ -38,10 +38,8 @@ impl<T: Serialize + Send> Writer for Res<T> {
 
         match serde_json::to_vec(&self) {
             Ok(bytes) => {
-                res.headers_mut().insert(
-                    CONTENT_TYPE,
-                    HeaderValue::from_static("application/json; charset=utf-8"),
-                );
+                res.headers_mut()
+                    .insert(CONTENT_TYPE, HeaderValue::from_static("application/json; charset=utf-8"));
                 res.status_code(status);
                 res.write_body(bytes).ok();
             }
