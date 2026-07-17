@@ -7,17 +7,34 @@ use serde_json::value::RawValue;
 use time::macros::date;
 
 use crate::{
-    CACHE, DF,
-    model::{Item, QuantileData},
+    CACHE, DF, LIST,
+    model::{QuantileData, TempItem},
     reject, res, resolve,
     resp::{Res, Resp},
 };
 
-pub fn api_router() -> Router {
-    Router::with_path("api")
-        .push(Router::with_path("indice").get(indice))
-        .push(Router::with_path("sector").get(sector))
-        .push(Router::with_path("test").get(test))
+pub async fn router() -> Router {
+    println!("股票池数量: {}", DF.list.len());
+    println!("开始时间: {}", DF.start);
+    println!("结束时间: {}", DF.end);
+    Router::new()
+        .push(
+            Router::with_path("api")
+                .push(mode1::mode1_router().await)
+                .push(Router::with_path("indice").get(indice))
+                .push(Router::with_path("sector").get(sector))
+                .push(Router::with_path("list").get(list))
+                .push(Router::with_path("test").get(test)),
+        )
+        .get(hello)
+}
+
+#[handler]
+fn list() -> Res<Box<RawValue>> {
+    let value = LIST.lock().unwrap();
+    let value = serde_json::to_string(&*value).unwrap();
+    let value = RawValue::from_string(value).unwrap();
+    res!(value => 200, "ok")
 }
 
 #[handler]
@@ -28,6 +45,11 @@ fn indice() -> Res<Arc<HashSet<String>>> {
 #[handler]
 fn sector() -> Res<Arc<HashSet<String>>> {
     res!(DF.sector.clone() => 200, "ok")
+}
+
+#[handler]
+async fn hello() -> Resp<&'static str> {
+    resolve!("Hello World" => 200, "ok")
 }
 
 #[handler]
@@ -53,7 +75,7 @@ fn test_run() -> Box<RawValue> {
                 let profit3 = (next2.open - next1.open) / next1.open;
                 let profit4 = (next2.close - next1.open) / next1.open;
 
-                items.push(Item {
+                items.push(TempItem {
                     profit1,
                     profit2,
                     profit3,
