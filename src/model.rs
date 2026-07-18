@@ -98,7 +98,7 @@ impl QuantileData {
             return;
         }
 
-        items.sort_by(|left, right| left.factor.total_cmp(&right.factor));
+        items.sort_unstable_by(|left, right| left.factor.total_cmp(&right.factor));
 
         let groups: Vec<&[TempItem]> = if items.len() < self.count {
             vec![items.as_slice(); self.count]
