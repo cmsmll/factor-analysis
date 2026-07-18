@@ -3,9 +3,11 @@
 use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
 
-use crate::{MODE1, prelude::*};
+use crate::{MODE1, prelude::*, toolbox::Json};
 
 pub mod amplitude;
+pub mod manager;
+pub mod market_value;
 pub mod turnover_rate;
 
 /// 模式一因子的公共请求参数。
@@ -29,22 +31,83 @@ pub struct Mode1Template {
 /// 构建模式一的路由树。
 pub async fn mode1_router() -> Router {
     Router::with_path("mode1")
-        .push(Router::with_path("list").get(list))
+        .push(Router::with_path("list").post(list))
         .push(turnover_rate::router().await)
         .push(amplitude::router().await)
+        .push(market_value::router().await)
 }
 
-/// 获取模式一因子的默认请求模板。
+/// 按筛选条件获取模式一因子的请求参数和分析结果。
 ///
-/// 当前依次返回换手率因子和振幅因子模板。模板中的 `base.id` 是实际接口路径 ID。
+/// 请求体为股票池和日期筛选条件。接口并发执行所有已注册的模式一任务，
+/// 返回每个因子的实际请求参数和对应分析结果。
 #[endpoint(
     tags("模式一"),
     operation_id = "list_mode1_factors",
-    responses((status_code = 200, description = "模式一因子模板列表", body = Res<Vec<Mode1Template>>))
+    responses((status_code = 200, description = "模式一因子参数和分析结果列表"))
 )]
-pub(super) fn list() -> Res<Box<RawValue>> {
-    let value = MODE1.lock().unwrap();
-    let value = serde_json::to_string(&*value).unwrap();
-    let value = RawValue::from_string(value).unwrap();
-    res!(value => 200, "ok")
+pub(super) async fn list(filter: Json<Filter>) -> Res<Vec<manager::ListItem>> {
+    res!(MODE1.execute(&filter.0).await => 200, "ok")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use salvo::{
+        Service,
+        http::StatusCode,
+        prelude::Router,
+        test::{ResponseExt, TestClient},
+    };
+    use serde_json::{Value, json, value::RawValue};
+    use time::macros::date;
+    use tokio::sync::broadcast;
+
+    use super::list;
+    use crate::{MODE1, args::Filter};
+
+    // 测试 POST /api/mode1/list 接收 Filter，并返回 MODE1 执行后的参数与数据。
+    #[tokio::test]
+    async fn list_executes_registered_tasks_with_request_filter() {
+        MODE1
+            .register(Arc::new(|filter| {
+                let args = json!({
+                    "base": {
+                        "id": "interface-test",
+                        "count": 5,
+                        "filter": filter,
+                    }
+                });
+                let args = Arc::from(RawValue::from_string(args.to_string()).unwrap());
+                let data = Arc::from(RawValue::from_string(r#"{"name":"接口测试"}"#.to_owned()).unwrap());
+                let (sender, receiver) = broadcast::channel(1);
+                sender.send(data).unwrap();
+                (args, receiver)
+            }))
+            .await;
+
+        let mut filter = Filter::new(date!(2024 - 01 - 02), date!(2025 - 06 - 30));
+        filter.filter_bz = true;
+        let router = Router::with_path("api").push(Router::with_path("mode1").push(Router::with_path("list").post(list)));
+        let service = Service::new(router);
+
+        let mut response = TestClient::post("http://localhost/api/mode1/list").json(&filter).send(&service).await;
+
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        let body: Value = response.take_json().await.unwrap();
+        assert_eq!(body["code"], 200);
+        assert_eq!(body["info"], "ok");
+
+        let item = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["args"]["base"]["id"] == "interface-test")
+            .expect("响应中应包含接口测试任务");
+        assert_eq!(item["args"]["base"]["filter"]["start"], "2024-01-02");
+        assert_eq!(item["args"]["base"]["filter"]["end"], "2025-06-30");
+        assert_eq!(item["args"]["base"]["filter"]["filter_bz"], true);
+        assert_eq!(item["data"]["name"], "接口测试");
+    }
 }

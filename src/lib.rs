@@ -9,19 +9,19 @@ pub mod prelude;
 pub mod router;
 pub mod toolbox;
 
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 pub use app::{App, ParseCommand, RunCommand, TestCommand};
-use serde_json::value::RawValue;
 pub use toolbox::*;
 
 use crate::{
     cache::Cache,
     config::Config,
     db::{DataFrame, DataFrameDb},
+    router::mode1::manager::Mode1Manager,
 };
 
 pub static CONFIG: LazyLock<Config> = LazyLock::new(Config::load_or_gen_default);
 pub static CACHE: LazyLock<Cache> = LazyLock::new(|| Cache::new("cache"));
 pub static DF: LazyLock<DataFrame> = LazyLock::new(|| DataFrameDb::from_config(&CONFIG).unwrap().query_all().unwrap());
-pub static MODE1: LazyLock<Mutex<Vec<Box<RawValue>>>> = LazyLock::new(Default::default);
+pub static MODE1: LazyLock<Mode1Manager> = LazyLock::new(Default::default);

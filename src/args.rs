@@ -5,6 +5,7 @@ use salvo_oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use time::Date;
+use tokio::sync::broadcast::Receiver;
 
 use crate::{config::Config, toolbox::date_format};
 
@@ -24,9 +25,11 @@ pub trait ArgsHandle: Serialize + 'static {
         let s = serde_json::to_string(self).unwrap();
         RawValue::from_string(s).unwrap()
     }
+
+    fn register(filter: &Filter) -> (Arc<RawValue>, Receiver<Arc<RawValue>>);
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct Filter {
     /// 开始时间
     #[serde(with = "date_format")]
@@ -57,9 +60,10 @@ impl Filter {
     }
 
     pub fn from_config(confg: &Config) -> Self {
+        let period = confg.period.first().expect("period配置至少需要一个周期");
         Self {
-            start: confg.args.start,
-            end: confg.args.end,
+            start: period.start,
+            end: period.end,
             filter_bz: false,
             filter_st: false,
             sector: Default::default(),

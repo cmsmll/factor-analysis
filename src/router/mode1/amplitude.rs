@@ -5,18 +5,28 @@ use std::sync::Arc;
 use salvo::{Router, Writer};
 use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast::Receiver;
 
 use crate::{math::dev, prelude::*, router::mode1::Base, toolbox::Json};
 
 /// 振幅因子分析请求。
 ///
-/// 客户端通常先从 `GET /api/mode1/list` 取得默认结构，再按需修改参数。
+/// 客户端通常先从 `POST /api/mode1/list` 取得默认结构，再按需修改参数。
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct Req {
     base: Base,
 }
 
-impl ArgsHandle for Req {}
+impl ArgsHandle for Req {
+    fn register(filter: &Filter) -> (Arc<RawValue>, Receiver<Arc<RawValue>>) {
+        let mut req = Self::default();
+        req.base.filter = filter.clone();
+        let value = Arc::from(req.raw_value());
+        let key = req.hashcode();
+        let recv = CACHE.get_or_run(key, move || amplitude_run(req));
+        (value, recv)
+    }
+}
 
 impl Default for Req {
     fn default() -> Self {
@@ -38,12 +48,9 @@ impl Default for Req {
 ///
 /// 初始化路由时会把默认 [`Req`] 写入模式一接口列表，并预先计算默认参数结果。
 /// `factor_id` 为 [`Req::id`] 生成的动态值，客户端应通过
-/// `GET /api/mode1/list` 获取。
+/// `POST /api/mode1/list` 获取。
 pub async fn router() -> Router {
-    let req = Req::default();
-    let key = req.hashcode();
-    MODE1.lock().unwrap().push(req.raw_value());
-    CACHE.get_or_run(key, move || amplitude_run(req)).await.unwrap();
+    MODE1.register(Arc::new(Req::register)).await;
     Router::with_path(Req::id()).post(amplitude)
 }
 
@@ -77,7 +84,7 @@ pub async fn router() -> Router {
 )]
 pub async fn amplitude(args: Json<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
-    match CACHE.get_or_run(key, move || amplitude_run(args.0)).await {
+    match CACHE.get_or_run(key, move || amplitude_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }

@@ -30,34 +30,37 @@ impl Cache {
             }),
         }
     }
-    pub async fn get(&self, args: &str) -> Option<Arc<RawValue>> {
+    pub fn get(&self, args: &str) -> Option<Receiver<Arc<RawValue>>> {
         let receiver = {
             let running = self.inner.running.lock().unwrap();
             running.get(args).map(Receiver::resubscribe)
         };
 
-        if let Some(mut receiver) = receiver {
-            return receiver.recv().await.ok();
+        if let Some(receiver) = receiver {
+            return Some(receiver);
         }
 
+        let (tx, rx) = broadcast::channel(1);
         let file_path = self.inner.directory.join(format!("{args}.json"));
-        let json = tokio::fs::read_to_string(file_path).await.ok()?;
-        RawValue::from_string(json).ok().map(Arc::from)
+        let json = fs::read_to_string(file_path).ok()?;
+        let value = RawValue::from_string(json).ok().map(Arc::from)?;
+        tx.send(value).ok()?;
+        Some(rx)
     }
 
-    pub async fn get_or_run(
-        &self,
-        args: Arc<str>,
-        f: impl FnOnce() -> Box<RawValue> + Send + 'static,
-    ) -> Result<Arc<RawValue>, broadcast::error::RecvError> {
-        if let Some(json) = self.get(&args).await {
-            return Ok(json);
+    /// 内部使用spawn_blocking执行可以跑耗时任务
+    pub fn get_or_run<F>(&self, args: Arc<str>, func: F) -> Receiver<Arc<RawValue>>
+    where
+        F: FnOnce() -> Box<RawValue> + Send + 'static,
+    {
+        if let Some(json) = self.get(&args) {
+            return json;
         }
 
-        self.run(args, f).await.recv().await
+        self.run(args, func)
     }
 
-    pub async fn run(&self, args: Arc<str>, f: impl FnOnce() -> Box<RawValue> + Send + 'static) -> Receiver<Arc<RawValue>> {
+    pub fn run(&self, args: Arc<str>, func: impl FnOnce() -> Box<RawValue> + Send + 'static) -> Receiver<Arc<RawValue>> {
         let mut running = self.inner.running.lock().unwrap();
         if let Some(rx) = running.get(args.as_ref()) {
             return rx.resubscribe();
@@ -69,7 +72,7 @@ impl Cache {
 
         let cache = self.clone();
         tokio::task::spawn_blocking(move || {
-            let result = catch_unwind(AssertUnwindSafe(|| Arc::<RawValue>::from(f())));
+            let result = catch_unwind(AssertUnwindSafe(|| Arc::<RawValue>::from(func())));
 
             match result {
                 Ok(json) => {

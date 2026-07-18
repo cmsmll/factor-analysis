@@ -1,11 +1,14 @@
-<script setup lang="ts"></script>
+<script setup lang="ts">
+import { RouterView } from 'vue-router'
+
+import GlobalFilterSelector from '@/components/common/GlobalFilterSelector.vue'
+import GlobalLoading from '@/components/common/GlobalLoading.vue'
+import GlobalMessage from '@/components/common/GlobalMessage.vue'
+</script>
 
 <template>
-  <h1>You did it!</h1>
-  <p>
-    Visit <a href="https://vuejs.org/" target="_blank" rel="noopener">vuejs.org</a> to read the
-    documentation
-  </p>
+  <RouterView />
+  <GlobalFilterSelector />
+  <GlobalLoading />
+  <GlobalMessage />
 </template>
-
-<style scoped></style>

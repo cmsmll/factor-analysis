@@ -210,7 +210,7 @@ mod tests {
 
         let config = Config {
             server: ServerConfig::default(),
-            args: Default::default(),
+            period: Vec::new(),
             data: DataConfig {
                 market: directory.path().join("database/market"),
                 finance: directory.path().join("database/finance"),

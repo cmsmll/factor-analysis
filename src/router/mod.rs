@@ -12,7 +12,8 @@ use serde_json::value::RawValue;
 use time::macros::date;
 
 use crate::{
-    CACHE, DF,
+    CACHE, CONFIG, DF,
+    config::Period,
     model::{QuantileData, TempItem},
     reject, res, resolve,
     resp::{Res, Resp},
@@ -30,6 +31,7 @@ pub async fn router() -> Router {
                 .push(mode1::mode1_router().await)
                 .push(Router::with_path("indice").get(indice))
                 .push(Router::with_path("sector").get(sector))
+                .push(Router::with_path("period").get(period))
                 .push(Router::with_path("test").get(test)),
         )
         .get(hello)
@@ -59,6 +61,11 @@ fn sector() -> Res<Arc<HashSet<String>>> {
     res!(DF.sector.clone() => 200, "ok")
 }
 
+#[endpoint]
+fn period() -> Res<Vec<Period>> {
+    res!(CONFIG.period.clone() => 200, "ok")
+}
+
 /// 服务健康检查。
 #[endpoint(
     tags("系统"),
@@ -81,7 +88,7 @@ async fn hello() -> Resp<&'static str> {
     )
 )]
 async fn test() -> Resp<Arc<RawValue>> {
-    match CACHE.get_or_run(Arc::from("test"), test_run).await {
+    match CACHE.get_or_run(Arc::from("test"), test_run).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }
@@ -134,9 +141,10 @@ mod tests {
                 .push(Router::with_path("test").get(test))
                 .push(
                     Router::with_path("mode1")
-                        .push(Router::with_path("list").get(mode1::list))
+                        .push(Router::with_path("list").post(mode1::list))
                         .push(Router::with_path("turnover-rate").post(mode1::turnover_rate::turnover_rate))
-                        .push(Router::with_path("amplitude").post(mode1::amplitude::amplitude)),
+                        .push(Router::with_path("amplitude").post(mode1::amplitude::amplitude))
+                        .push(Router::with_path("market-value").post(mode1::market_value::market_value)),
                 ),
         );
         let document = crate::app::build_openapi(&router);
@@ -150,6 +158,7 @@ mod tests {
             "list_mode1_factors",
             "analyze_turnover_rate",
             "analyze_amplitude",
+            "analyze_market_value",
         ] {
             assert!(json.contains(operation), "OpenAPI 缺少操作: {operation}");
         }

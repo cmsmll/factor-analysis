@@ -42,7 +42,7 @@ Swagger UI 按“系统”“基础数据”“模式一”“测试”分组展
 | `GET` | `/api/indice` | 股票池指数列表。 |
 | `GET` | `/api/sector` | 股票池行业板块列表。 |
 | `GET` | `/api/test` | 固定参数的测试换手率分析。 |
-| `GET` | `/api/mode1/list` | 模式一因子默认请求模板。 |
+| `POST` | `/api/mode1/list` | 按 Filter 并发计算全部模式一因子。 |
 | `POST` | `/api/mode1/{factor_id}` | 执行对应的模式一因子分析。 |
 
 ## 动态因子 ID
@@ -50,7 +50,7 @@ Swagger UI 按“系统”“基础数据”“模式一”“测试”分组展
 模式一接口使用请求类型的 `TypeId` 生成动态 `factor_id`。该值可能随类型定义或编译环境变化，客户端不应写死，应先调用：
 
 ```text
-GET /api/mode1/list
+POST /api/mode1/list
 ```
 
 再使用模板中的 `base.id` 请求：
@@ -113,53 +113,45 @@ POST /api/mode1/{factor_id}
 }
 ```
 
-## GET /api/mode1/list
+## POST /api/mode1/list
 
-返回模式一已注册因子的默认请求模板。当前注册顺序为：
+请求体为 `Filter`。接口使用同一筛选条件并发计算全部已注册因子，并返回每个
+因子的实际请求参数 `args` 和分析结果 `data`。当前注册顺序为：
 
 1. 换手率因子。
 2. 振幅因子。
+3. 总市值因子。
 
-两个模板参数结构相同，但 `base.id` 不同：
+请求示例：
 
 ```json
 {
-  "info": "ok",
-  "code": 200,
-  "data": [
-    {
-      "base": {
-        "id": "<turnover_rate_id>",
-        "count": 5,
-        "filter": {
-          "start": "2025-01-01",
-          "end": "2025-12-31",
-          "filter_bz": false,
-          "filter_st": false,
-          "sector": [],
-          "indice": []
-        }
-      }
-    },
-    {
-      "base": {
-        "id": "<amplitude_id>",
-        "count": 5,
-        "filter": {
-          "start": "2025-01-01",
-          "end": "2025-12-31",
-          "filter_bz": false,
-          "filter_st": false,
-          "sector": [],
-          "indice": []
-        }
-      }
-    }
-  ]
+  "start": "2025-01-01",
+  "end": "2025-12-31",
+  "filter_bz": false,
+  "filter_st": false,
+  "sector": [],
+  "indice": []
 }
 ```
 
-日期示例以默认配置为准，实际值来自 `config.toml` 的 `[args]`。
+响应中的每个列表项结构如下：
+
+```json
+{
+  "args": {
+    "base": {
+      "id": "<factor_id>",
+      "count": 5,
+      "filter": {}
+    }
+  },
+  "data": {
+    "name": "因子名称",
+    "count": 5
+  }
+}
+```
 
 ## POST /api/mode1/{factor_id}
 
@@ -197,7 +189,7 @@ Content-Type: application/json
 | `base.filter.start` | string | 开始日期，格式 `YYYY-MM-DD`，超过数据范围时会裁剪。 |
 | `base.filter.end` | string | 结束日期，格式 `YYYY-MM-DD`，超过数据范围时会裁剪。 |
 | `base.filter.filter_bz` | boolean | 为 `true` 时排除北京证券交易所。 |
-| `base.filter.filter_st` | boolean | 预留字段，当前尚未参与筛选。 |
+| `base.filter.filter_st` | boolean | 为 `true` 时排除名称中包含 `ST` 的合约。 |
 | `base.filter.sector` | string[] | 匹配合约的 `SW1`、`SW2`、`SW3`。 |
 | `base.filter.indice` | string[] | 匹配合约所属指数。 |
 
@@ -220,6 +212,19 @@ Content-Type: application/json
 ```
 
 当日最低价为 `0` 时，振幅直接记为 `0`。每日按振幅从低到高排序并切分为 `base.count` 个分位。
+
+## 总市值因子
+
+使用 `/api/mode1/list` 返回的第三个 `base.id`。
+
+总市值因子直接使用对齐财务数据中的字段：
+
+```text
+finance.total_market
+```
+
+`total_market` 单位为元。每日按总市值从低到高排序并切分为 `base.count`
+个分位，不再使用总股本和当日收盘价重新计算。
 
 ## 公共分位逻辑
 

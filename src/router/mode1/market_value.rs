@@ -1,4 +1,4 @@
-//! 换手率因子接口。
+//! 总市值因子接口。
 
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ use tokio::sync::broadcast::Receiver;
 
 use crate::{prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::Json};
 
-/// 换手率因子分析请求。
+/// 总市值因子分析请求。
 ///
 /// 客户端通常先从 `POST /api/mode1/list` 取得默认结构，再按需修改参数。
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -23,7 +23,7 @@ impl ArgsHandle for Req {
         req.base.filter = filter.clone();
         let value = Arc::from(req.raw_value());
         let key = req.hashcode();
-        let recv = CACHE.get_or_run(key, move || turnover_rate_run(req));
+        let recv = CACHE.get_or_run(key, move || market_value_run(req));
         (value, recv)
     }
 }
@@ -40,69 +40,47 @@ impl Default for Req {
     }
 }
 
-/// 注册换手率因子接口，并准备默认请求模板和默认结果缓存。
+/// 注册总市值因子接口。
 ///
-/// # Route
-///
-/// `POST /api/mode1/{factor_id}`
-///
-/// 初始化路由时会把默认 [`Req`] 写入全局接口列表，并预先计算默认参数结果。
-/// `factor_id` 为 [`Req::id`] 生成的动态值，客户端应通过 `POST /api/mode1/list` 获取。
+/// 动态 `factor_id` 应通过 `POST /api/mode1/list` 获取。
 pub async fn router() -> Router {
     MODE1.register(Arc::new(Req::register)).await;
-    Router::with_path(Req::id()).post(turnover_rate)
+    Router::with_path(Req::id()).post(market_value)
 }
 
-/// 执行换手率因子的分位分析。
-///
-/// # Route
-///
-/// `POST /api/mode1/{factor_id}`
-///
-/// 请求头必须包含 `Content-Type: application/json`。请求体使用 [`Req`]，其中 `base` 包含动态接口 ID、分位数量和筛选条件：
-/// 日期按 `YYYY-MM-DD` 解析；`filter_bz = true` 时排除北京证券交易所；
-/// `sector` 与 `indice` 非空时按并集筛选；`filter_st` 为 `true` 时排除名称中包含 `ST` 的合约。
+/// 执行总市值因子的分位分析。
 ///
 /// # Analysis
 ///
-/// 每个交易日按当日换手率从低到高排序并切分为 `base.count` 个分位，
-/// 计算各分位的平均换手率和四种平均收益。股票数少于分位数时，所有分位
-/// 共享当日完整股票集合。结果按完整请求体哈希缓存。
-///
-/// # Response
-///
-/// 成功时返回 `200`，`data` 为 [`QuantileData`]。JSON 解析失败或请求头错误
-/// 由提取器返回 `415`；后台分析任务失败时返回 `400` 和 `"获取数据失败"`。
+/// 每个交易日直接读取对齐财务数据中的 `total_market` 作为总市值，
+/// 按总市值从低到高切分为 `base.count` 个分位，因子值单位为元。
 #[endpoint(
     tags("模式一"),
-    operation_id = "analyze_turnover_rate",
+    operation_id = "analyze_market_value",
     responses(
-        (status_code = 200, description = "换手率因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "总市值因子分析结果", body = Res<QuantileData>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
     )
 )]
-pub async fn turnover_rate(args: Json<Req>) -> Resp<Arc<RawValue>> {
+pub async fn market_value(args: Json<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
-    match CACHE.get_or_run(key, move || turnover_rate_run(args.0)).recv().await {
+    match CACHE.get_or_run(key, move || market_value_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }
 }
 
-/// 根据请求参数计算换手率分位数据。
-///
-/// 只有同时具备当日、下一交易日和下下交易日行情的股票才参与当日计算。
-/// 四种收益依次为：当日收盘到下一日收盘、下一日开盘到收盘、下一日开盘到
-/// 下下日开盘、下一日开盘到下下日收盘。
-fn turnover_rate_run(args: Req) -> Box<RawValue> {
+/// 根据总市值计算每日分位数据和四种收益。
+fn market_value_run(args: Req) -> Box<RawValue> {
     let df = DF.filter(&args.base.filter);
-    let mut qd: QuantileData = QuantileData::new("换手率因子", "按换手率从低到高分位", args.base.count);
+    let mut qd = QuantileData::new("总市值因子", "按总市值从低到高分位", args.base.count);
 
     for index in df.index_iter() {
         let mut items = Vec::with_capacity(df.list.len());
         for item in &df.list {
-            if let Some((curr, _)) = item.data(&index)
+            if let Some((curr, data_index)) = item.data(&index)
+                && let Some(finance) = item.finance.get(data_index)
                 && let Some(next1) = item.after(&index, 1)
                 && let Some(next2) = item.after(&index, 2)
             {
@@ -119,7 +97,7 @@ fn turnover_rate_run(args: Req) -> Box<RawValue> {
                     name: item.metadata.name.clone(),
                     code: item.metadata.code.clone(),
                     turnover_rate: curr.turnover_rate,
-                    factor: curr.turnover_rate,
+                    factor: finance.total_market,
                 });
             }
         }

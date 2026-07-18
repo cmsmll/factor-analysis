@@ -74,6 +74,9 @@ impl DataFrame {
             if args.filter_bz && metadata.exchange == "北京证券交易所" {
                 return false;
             }
+            if args.filter_st && metadata.name.contains("ST") {
+                return false;
+            }
 
             if !has_metadata_filter {
                 return true;
@@ -235,16 +238,28 @@ mod tests {
         assert!(Arc::ptr_eq(&filtered.indice, &frame.indice));
     }
 
-    // 测试 filter_bz 只排除北京证券交易所，filter_st 暂不参与筛选。
+    // 测试 filter_bz 只排除北京证券交易所。
     #[test]
     fn from_args_filters_beijing_exchange_only() {
         let frame = frame();
-        let filtered = frame.filter(&args(HashSet::new(), HashSet::new(), true, true));
+        let filtered = frame.filter(&args(HashSet::new(), HashSet::new(), true, false));
 
         assert_eq!(filtered.list.len(), 1);
         assert_eq!(filtered.list[0].metadata.exchange, "上海证券交易所");
         assert_eq!(filtered.sector.len(), 2);
         assert_eq!(filtered.indice.len(), 2);
+    }
+
+    // 测试 filter_st 会排除名称中包含 ST 的合约。
+    #[test]
+    fn from_args_filters_st_contracts() {
+        let mut frame = frame();
+        frame.list.push(contract("ST0001", "上海证券交易所", "行业三", "测试指数"));
+
+        let filtered = frame.filter(&args(HashSet::new(), HashSet::new(), false, true));
+
+        assert_eq!(filtered.list.len(), 2);
+        assert!(filtered.list.iter().all(|contract| !contract.metadata.name.contains("ST")));
     }
 
     // 测试板块和指数均不匹配时过滤全部合约，但不修改原始列表信息。

@@ -268,7 +268,7 @@ mod tests {
         let finance_all = FinanceDB::open_read_only(&finance_path).unwrap().query_all().unwrap();
         let config = Config {
             server: Default::default(),
-            args: Default::default(),
+            period: Vec::new(),
             data: crate::config::DataConfig {
                 market: market_dir.clone(),
                 finance: finance_dir.clone(),

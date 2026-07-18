@@ -22,9 +22,9 @@ pub struct Config {
     /// HTTP 服务器配置。
     #[serde(default)]
     pub server: ServerConfig,
-    /// 分析参数配置。
-    #[serde(default)]
-    pub args: ArgsConfig,
+    /// 可选的分析周期范围。
+    #[serde(default = "default_periods")]
+    pub period: Vec<Period>,
     /// 数据源和数据库路径配置。
     #[serde(default)]
     pub data: DataConfig,
@@ -41,7 +41,15 @@ impl Config {
         let path = path.as_ref();
         let content =
             fs::read_to_string(path).map_err(|error| io::Error::new(error.kind(), format!("读取配置文件 {} 失败: {error}", path.display())))?;
-        toml::from_str(&content).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("解析配置文件 {} 失败: {error}", path.display())))
+        let config: Self = toml::from_str(&content)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("解析配置文件 {} 失败: {error}", path.display())))?;
+        if config.period.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("解析配置文件 {} 失败: period 至少需要一个周期", path.display()),
+            ));
+        }
+        Ok(config)
     }
 
     /// 加载当前目录的配置；不存在时生成默认配置，其他错误打印后以状态码 0 退出。
@@ -104,7 +112,7 @@ impl Config {
     fn default_values() -> Self {
         Self {
             server: ServerConfig::default(),
-            args: ArgsConfig::default(),
+            period: default_periods(),
             data: DataConfig::default(),
         }
     }
@@ -134,10 +142,12 @@ impl Default for ServerConfig {
     }
 }
 
-/// 分析参数配置。
+/// 分析周期范围。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ArgsConfig {
+#[serde(deny_unknown_fields)]
+pub struct Period {
+    /// 周期名称。
+    pub name: String,
     /// 开始日期。
     #[serde(with = "date_format")]
     pub start: Date,
@@ -146,13 +156,23 @@ pub struct ArgsConfig {
     pub end: Date,
 }
 
-impl Default for ArgsConfig {
-    fn default() -> Self {
+impl Period {
+    fn new(name: impl Into<String>, start_year: i32) -> Self {
         Self {
-            start: Date::from_calendar_date(2025, Month::January, 1).expect("默认开始日期有效"),
+            name: name.into(),
+            start: Date::from_calendar_date(start_year, Month::January, 1).expect("默认开始日期有效"),
             end: Date::from_calendar_date(2025, Month::December, 31).expect("默认结束日期有效"),
         }
     }
+}
+
+fn default_periods() -> Vec<Period> {
+    vec![
+        Period::new("最近一年", 2025),
+        Period::new("最近三年", 2023),
+        Period::new("最近五年", 2021),
+        Period::new("最近十年", 2016),
+    ]
 }
 /// 数据库和原始 TBF 数据路径配置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,7 +223,12 @@ mod tests {
         let actual = Config::load_from(&path).unwrap();
 
         assert!(content.contains("[server]"));
-        assert!(content.contains("[args]"));
+        assert_eq!(content.matches("[[period]]").count(), 4);
+        assert!(content.contains("name = \"最近一年\""));
+        assert!(content.contains("name = \"最近三年\""));
+        assert!(content.contains("name = \"最近五年\""));
+        assert!(content.contains("name = \"最近十年\""));
+        assert!(content.contains("start = \"2016-01-01\""));
         assert!(content.contains("start = \"2025-01-01\""));
         assert!(content.contains("end = \"2025-12-31\""));
         assert!(content.contains("[data]"));
@@ -271,18 +296,19 @@ mod tests {
         assert_eq!(config.server.addr, IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(config.data.tbf_market, Path::new("custom/market"));
         assert_eq!(config.data.finance, DataConfig::default().finance);
-        assert_eq!(config.args, ArgsConfig::default());
+        assert_eq!(config.period, default_periods());
     }
 
-    // 测试 args 日期字符串通过公共 date_format 转换为 Date。
+    // 测试 period 数组中的日期字符串通过公共 date_format 转换为 Date。
     #[test]
-    fn load_parses_args_dates() {
+    fn load_parses_periods() {
         let directory = tempdir().unwrap();
         let path = directory.path().join(CONFIG_FILE);
         fs::write(
             &path,
             r#"
-                [args]
+                [[period]]
+                name = "自定义周期"
                 start = "2024-01-02"
                 end = "2026-06-30"
             "#,
@@ -291,8 +317,23 @@ mod tests {
 
         let config = Config::load_from(path).unwrap();
 
-        assert_eq!(config.args.start, Date::from_calendar_date(2024, Month::January, 2).unwrap());
-        assert_eq!(config.args.end, Date::from_calendar_date(2026, Month::June, 30).unwrap());
+        assert_eq!(config.period.len(), 1);
+        assert_eq!(config.period[0].name, "自定义周期");
+        assert_eq!(config.period[0].start, Date::from_calendar_date(2024, Month::January, 2).unwrap());
+        assert_eq!(config.period[0].end, Date::from_calendar_date(2026, Month::June, 30).unwrap());
+    }
+
+    // 测试显式配置空周期数组时返回错误，避免分析阶段缺少默认周期。
+    #[test]
+    fn load_rejects_empty_periods() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(CONFIG_FILE);
+        fs::write(&path, "period = []").unwrap();
+
+        let error = Config::load_from(path).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("period 至少需要一个周期"));
     }
     // 测试重新生成默认配置会完整替换已有文件，不会留下旧字段。
     #[test]
