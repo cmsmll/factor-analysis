@@ -4,7 +4,7 @@ use salvo_oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use crate::math::avg_iter;
+use crate::math::avg_array;
 
 /// 收益信息
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -65,8 +65,6 @@ pub struct QuantileData {
 
 /// 每个股票当期数据
 pub struct TempItem {
-    pub name: Arc<str>,     // 股票名称
-    pub code: Arc<str>,     // 股票代码
     pub factor: f64,        // 因子值
     pub turnover_rate: f64, // 当日换手率
     pub profit1: f64,       // 收益模式1: 当天收盘价买隔天收盘价卖
@@ -96,6 +94,10 @@ impl QuantileData {
 
     /// 按因子值排序并切分分位，追加各分位的平均因子、平均换手率和收益。
     pub fn push(&mut self, datetime: Arc<str>, mut items: Vec<TempItem>) {
+        if items.is_empty() {
+            return;
+        }
+
         items.sort_by(|left, right| left.factor.total_cmp(&right.factor));
 
         let groups: Vec<&[TempItem]> = if items.len() < self.count {
@@ -107,12 +109,17 @@ impl QuantileData {
         };
 
         for (index, group) in groups.into_iter().enumerate() {
-            self.factor[index].push(avg_iter(group.iter().map(|item| item.factor)));
-            self.turnover_rate[index].push(avg_iter(group.iter().map(|item| item.turnover_rate)));
-            self.profit1[index].push(avg_iter(group.iter().map(|item| item.profit1)));
-            self.profit2[index].push(avg_iter(group.iter().map(|item| item.profit2)));
-            self.profit3[index].push(avg_iter(group.iter().map(|item| item.profit3)));
-            self.profit4[index].push(avg_iter(group.iter().map(|item| item.profit4)));
+            let [factor, turnover_rate, profit1, profit2, profit3, profit4] = avg_array(
+                group
+                    .iter()
+                    .map(|item| [item.factor, item.turnover_rate, item.profit1, item.profit2, item.profit3, item.profit4]),
+            );
+            self.factor[index].push(factor);
+            self.turnover_rate[index].push(turnover_rate);
+            self.profit1[index].push(profit1);
+            self.profit2[index].push(profit2);
+            self.profit3[index].push(profit3);
+            self.profit4[index].push(profit4);
         }
 
         self.datetime.push(datetime);
@@ -128,10 +135,8 @@ impl QuantileData {
 mod tests {
     use super::*;
 
-    fn item(code: &str, factor: f64) -> TempItem {
+    fn item(factor: f64) -> TempItem {
         TempItem {
-            name: Arc::from(format!("股票{code}")),
-            code: Arc::from(code),
             factor,
             turnover_rate: factor * 10.0,
             profit1: factor / 100.0,
@@ -165,10 +170,7 @@ mod tests {
     fn quantile_push_sorts_and_splits_items() {
         let mut data = QuantileData::new("测试策略", "两分位", 2);
 
-        data.push(
-            Arc::from("2025-01-01"),
-            vec![item("000004", 4.0), item("000001", 1.0), item("000003", 3.0), item("000002", 2.0)],
-        );
+        data.push(Arc::from("2025-01-01"), vec![item(4.0), item(1.0), item(3.0), item(2.0)]);
 
         assert_eq!(data.datetime[0].as_ref(), "2025-01-01");
         assert_eq!(data.factor, [vec![1.5], vec![3.5]]);
@@ -186,16 +188,7 @@ mod tests {
     fn quantile_push_uses_integer_boundaries() {
         let mut data = QuantileData::new("测试策略", "三分位", 3);
 
-        data.push(
-            Arc::from("2025-01-02"),
-            vec![
-                item("000005", 5.0),
-                item("000001", 1.0),
-                item("000004", 4.0),
-                item("000002", 2.0),
-                item("000003", 3.0),
-            ],
-        );
+        data.push(Arc::from("2025-01-02"), vec![item(5.0), item(1.0), item(4.0), item(2.0), item(3.0)]);
 
         assert_eq!(data.factor, [vec![1.0], vec![2.5], vec![4.5]]);
     }
@@ -205,11 +198,23 @@ mod tests {
     fn quantile_push_shares_items_when_count_is_insufficient() {
         let mut data = QuantileData::new("测试策略", "四分位", 4);
 
-        data.push(Arc::from("2025-01-03"), vec![item("000002", 3.0), item("000001", 1.0)]);
+        data.push(Arc::from("2025-01-03"), vec![item(3.0), item(1.0)]);
 
         assert_eq!(data.factor, [vec![2.0], vec![2.0], vec![2.0], vec![2.0]]);
         assert_eq!(data.turnover_rate, [vec![20.0], vec![20.0], vec![20.0], vec![20.0]]);
         assert!(data.profit1.iter().all(|profit| (profit.source[0] - 0.02).abs() < 1e-12));
         assert_eq!(data.datetime[0].as_ref(), "2025-01-03");
+    }
+
+    // 测试空股票集合不会写入日期或虚假的零值。
+    #[test]
+    fn quantile_push_ignores_empty_items() {
+        let mut data = QuantileData::new("测试策略", "空数据", 3);
+
+        data.push(Arc::from("2025-01-04"), Vec::new());
+
+        assert!(data.datetime.is_empty());
+        assert!(data.factor.iter().all(Vec::is_empty));
+        assert!(data.profit1.iter().all(|profit| profit.source.is_empty()));
     }
 }

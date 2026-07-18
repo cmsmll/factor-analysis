@@ -101,9 +101,9 @@ fn test_run() -> Box<RawValue> {
     for index in df.index_iter() {
         let mut items = Vec::with_capacity(df.list.len());
         for item in &df.list {
-            if let Some((curr, _)) = item.data(&index)
-                && let Some(next1) = item.after(&index, 1)
-                && let Some(next2) = item.after(&index, 2)
+            if let Some(curr) = item.data(&index)
+                && let Some(next1) = curr.after(1)
+                && let Some(next2) = curr.after(2)
             {
                 let profit1 = (next1.close - curr.close) / curr.close;
                 let profit2 = (next1.close - next1.open) / next1.open;
@@ -115,8 +115,6 @@ fn test_run() -> Box<RawValue> {
                     profit2,
                     profit3,
                     profit4,
-                    name: item.metadata.name.clone(),
-                    code: item.metadata.code.clone(),
                     turnover_rate: curr.turnover_rate,
                     factor: curr.turnover_rate,
                 });

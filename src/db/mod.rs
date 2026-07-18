@@ -66,11 +66,11 @@ impl DataFrameDb {
         let mut index_table = BTreeSet::new();
 
         for ((market_conn, finance_conn), metadata) in self.market.iter().zip(self.finance.iter()).zip(self.metadata.iter()) {
-            let market = query_market(market_conn, range, &mut index_table)?;
+            let market = Arc::new(query_market(market_conn, range, &mut index_table)?);
             let Some((first, last)) = market.first().zip(market.last()) else {
                 continue;
             };
-            let finance = query_finance(finance_conn, range, &index_table)?;
+            let finance = Arc::new(query_finance(finance_conn, range, &index_table)?);
             align_check(&market, &finance)?;
             let table = market.iter().enumerate().map(|(index, md)| (md.datetime.clone(), index)).collect();
             let start = first.datetime.clone();
@@ -117,7 +117,7 @@ fn open_contract_databases(metadata: &[Metadata], directory: &Path) -> Result<Ve
         .collect()
 }
 
-fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table: &mut BTreeSet<Arc<str>>) -> Result<Vec<Arc<MarketData>>> {
+fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table: &mut BTreeSet<Arc<str>>) -> Result<Vec<MarketData>> {
     let sql = if range.is_some() {
         include_str!("sql/market_query_range.sql")
     } else {
@@ -131,7 +131,7 @@ fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table:
         } else {
             index_table.insert(datetime.clone());
         }
-        Ok(Arc::new(MarketData {
+        Ok(MarketData {
             datetime,
             change_percent: row.get(1)?,
             open: row.get(2)?,
@@ -142,7 +142,7 @@ fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table:
             turnover: row.get(7)?,
             turnover_rate: row.get(8)?,
             is_st: row.get(9)?,
-        }))
+        })
     };
 
     match range {
@@ -151,7 +151,7 @@ fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table:
     }
 }
 
-fn query_finance(database: &Connection, range: Option<(&str, &str)>, index_table: &BTreeSet<Arc<str>>) -> Result<Vec<Arc<Finance>>> {
+fn query_finance(database: &Connection, range: Option<(&str, &str)>, index_table: &BTreeSet<Arc<str>>) -> Result<Vec<Finance>> {
     let sql = if range.is_some() {
         include_str!("sql/finance_query_range.sql")
     } else {
@@ -162,13 +162,13 @@ fn query_finance(database: &Connection, range: Option<(&str, &str)>, index_table
         let datetime = row.get::<_, String>(0)?;
         let datetime = index_table.get(datetime.as_str()).cloned().unwrap_or_else(|| Arc::from(datetime));
 
-        Ok(Arc::new(Finance {
+        Ok(Finance {
             datetime,
             total_shares: row.get(1)?,
             float_shares: row.get(2)?,
             total_market: row.get(3)?,
             float_market: row.get(4)?,
-        }))
+        })
     };
 
     match range {
@@ -177,7 +177,7 @@ fn query_finance(database: &Connection, range: Option<(&str, &str)>, index_table
     }
 }
 
-fn align_check(market: &[Arc<MarketData>], finance: &[Arc<Finance>]) -> Result<()> {
+fn align_check(market: &[MarketData], finance: &[Finance]) -> Result<()> {
     if market.len() != finance.len() || !market.iter().zip(finance).all(|(market, finance)| market.datetime == finance.datetime) {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }

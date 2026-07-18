@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use derive_more::Deref;
 use time::Date;
 
 use crate::{
@@ -134,9 +135,31 @@ pub struct Contract {
     /// 时间表
     pub table: HashMap<Arc<str>, usize>,
     /// 行情数据
-    pub market: Vec<Arc<MarketData>>,
+    pub market: Arc<Vec<MarketData>>,
     /// 财务数据
-    pub finance: Vec<Arc<Finance>>,
+    pub finance: Arc<Vec<Finance>>,
+}
+
+#[derive(Debug, Deref)]
+pub struct MarketDataRef<'a> {
+    index: usize,
+    #[deref]
+    value: &'a MarketData,
+    inner: &'a [MarketData],
+}
+
+impl MarketDataRef<'_> {
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn before(&self, n: usize) -> Option<&MarketData> {
+        self.inner.get(self.index.checked_sub(n)?)
+    }
+
+    pub fn after(&self, n: usize) -> Option<&MarketData> {
+        self.inner.get(self.index.checked_add(n)?)
+    }
 }
 
 impl Contract {
@@ -144,19 +167,13 @@ impl Contract {
         self.table.get(&index.datetime).copied()
     }
 
-    pub fn data(&self, i: &Index) -> Option<(&MarketData, usize)> {
+    pub fn data(&self, i: &Index) -> Option<MarketDataRef<'_>> {
         let index = self.index(i)?;
-        Some((self.market.get(index)?, index))
-    }
-
-    pub fn before(&self, index: &Index, n: usize) -> Option<&MarketData> {
-        let i = self.index(index)?;
-        self.market.get(i.checked_sub(n)?).map(Arc::as_ref)
-    }
-
-    pub fn after(&self, index: &Index, n: usize) -> Option<&MarketData> {
-        let i = self.index(index)?;
-        self.market.get(i.checked_add(n)?).map(Arc::as_ref)
+        Some(MarketDataRef {
+            index,
+            value: self.market.get(index)?,
+            inner: self.market.as_slice(),
+        })
     }
 }
 #[cfg(test)]
@@ -186,8 +203,8 @@ mod tests {
                 listing_date: "2020-01-01".to_string(),
             },
             table: HashMap::new(),
-            market: Vec::new(),
-            finance: Vec::new(),
+            market: Arc::new(Vec::new()),
+            finance: Arc::new(Vec::new()),
         })
     }
 
@@ -217,6 +234,37 @@ mod tests {
             sector,
             indice,
         }
+    }
+
+    // 测试行情引用复用首次查询得到的本地索引访问前后数据。
+    #[test]
+    fn market_data_ref_uses_local_index_for_neighbors() {
+        let mut contract = contract("000001", "上海证券交易所", "行业一", "沪深指数");
+        let contract = Arc::get_mut(&mut contract).unwrap();
+        contract.market = Arc::new(
+            (1..=3)
+                .map(|day| MarketData {
+                    datetime: Arc::from(format!("2025-01-{day:02}")),
+                    close: f64::from(day),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        contract.table = contract
+            .market
+            .iter()
+            .enumerate()
+            .map(|(index, market)| (market.datetime.clone(), index))
+            .collect();
+
+        let current = contract.data(&Index::new(1, Arc::from("2025-01-02"))).unwrap();
+
+        assert_eq!(current.index(), 1);
+        assert_eq!(current.close, 2.0);
+        assert_eq!(current.before(1).unwrap().close, 1.0);
+        assert_eq!(current.after(1).unwrap().close, 3.0);
+        assert!(current.before(2).is_none());
+        assert!(current.after(2).is_none());
     }
 
     // 测试板块和指数条件使用并集，任意一项匹配即可保留合约。

@@ -13,7 +13,7 @@ use time::Date;
 use crate::db::parse::ParseTbf;
 
 /// 行情数据
-pub type MarketDataList = Vec<Arc<MarketData>>;
+pub type MarketDataList = Arc<Vec<MarketData>>;
 pub type MarketIndexTable = HashMap<Arc<str>, usize>;
 pub type MarketQueryResult = (MarketDataList, MarketIndexTable);
 
@@ -254,7 +254,7 @@ impl MarketDataDb {
             };
             table.insert(datetime.clone(), table.len());
 
-            Ok(Arc::new(MarketData {
+            Ok(MarketData {
                 datetime,
                 change_percent: row.get(1)?,
                 open: row.get(2)?,
@@ -265,10 +265,10 @@ impl MarketDataDb {
                 turnover: row.get(7)?,
                 turnover_rate: row.get(8)?,
                 is_st: row.get(9)?,
-            }))
+            })
         })?;
 
-        Ok((rows.collect::<Result<Vec<Arc<MarketData>>, rusqlite::Error>>()?, table))
+        Ok((Arc::new(rows.collect::<Result<Vec<MarketData>, rusqlite::Error>>()?), table))
     }
 
     pub fn query_with_table(&self, start: Date, end: Date, table: &mut BTreeSet<Arc<str>>) -> Result<MarketQueryResult> {
