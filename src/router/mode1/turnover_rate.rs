@@ -102,23 +102,12 @@ fn turnover_rate_run(args: Req) -> Box<RawValue> {
 
     for index in df.index_iter() {
         for item in &df.list {
-            if let Some(curr) = item.data(&index)
+            if let Some((curr, profit)) = item.data(&index)
                 && curr.filter_st(args.base.filter_st)
-                && let Some(next1) = curr.after(1)
-                && let Some(next2) = curr.after(2)
             {
-                let profit1 = (next1.close - curr.close) / curr.close;
-                let profit2 = (next1.close - next1.open) / next1.open;
-                let profit3 = (next2.open - next1.open) / next1.open;
-                let profit4 = (next2.close - next1.open) / next1.open;
-
                 items.push(TempItem {
-                    profit1,
-                    profit2,
-                    profit3,
-                    profit4,
-                    turnover_rate: curr.turnover_rate,
                     factor: curr.turnover_rate,
+                    profit,
                 });
             }
         }

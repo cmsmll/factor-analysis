@@ -134,6 +134,8 @@ pub struct Contract {
     pub market: Arc<Vec<MarketData>>,
     /// 财务数据
     pub finance: Arc<Vec<Finance>>,
+    /// 未来收益情况和换手率
+    pub profit: Vec<[f64; 5]>,
 }
 
 #[derive(Debug, Deref)]
@@ -163,13 +165,23 @@ impl Contract {
         self.table.get(&index.datetime).copied()
     }
 
-    pub fn data(&self, i: &Index) -> Option<MarketDataRef<'_>> {
+    pub fn data_ref(&self, i: &Index) -> Option<MarketDataRef<'_>> {
         let index = self.index(i)?;
         Some(MarketDataRef {
             index,
             value: self.market.get(index)?,
             inner: self.market.as_slice(),
         })
+    }
+
+    pub fn data(&self, i: &Index) -> Option<(&MarketData, &[f64; 5])> {
+        let index = self.index(i)?;
+        Some((self.market.get(index)?, self.profit.get(index)?))
+    }
+
+    pub fn data_and_finance(&self, i: &Index) -> Option<(&MarketData, &[f64; 5], &Finance)> {
+        let index = self.index(i)?;
+        Some((self.market.get(index)?, self.profit.get(index)?, self.finance.get(index)?))
     }
 }
 #[cfg(test)]
@@ -201,6 +213,7 @@ mod tests {
             table: HashMap::new(),
             market: Arc::new(Vec::new()),
             finance: Arc::new(Vec::new()),
+            profit: Vec::new(),
         })
     }
 
@@ -246,6 +259,16 @@ mod tests {
                 })
                 .collect(),
         );
+        contract.finance = Arc::new(
+            (1..=3)
+                .map(|day| Finance {
+                    datetime: Arc::from(format!("2025-01-{day:02}")),
+                    total_market: f64::from(day) * 100.0,
+                    ..Default::default()
+                })
+                .collect(),
+        );
+        contract.profit = vec![[0.1, 0.2, 0.3, 0.4, 0.5]];
         contract.table = contract
             .market
             .iter()
@@ -253,7 +276,7 @@ mod tests {
             .map(|(index, market)| (market.datetime.clone(), index))
             .collect();
 
-        let current = contract.data(&Index::new(1, Arc::from("2025-01-02"))).unwrap();
+        let current = contract.data_ref(&Index::new(1, Arc::from("2025-01-02"))).unwrap();
 
         assert_eq!(current.index(), 1);
         assert_eq!(current.close, 2.0);
@@ -261,6 +284,17 @@ mod tests {
         assert_eq!(current.after(1).unwrap().close, 3.0);
         assert!(current.before(2).is_none());
         assert!(current.after(2).is_none());
+
+        let first = Index::new(0, Arc::from("2025-01-01"));
+        let (market, profit) = contract.data(&first).unwrap();
+        assert_eq!(market.close, 1.0);
+        assert_eq!(profit, &[0.1, 0.2, 0.3, 0.4, 0.5]);
+
+        let (market, profit, finance) = contract.data_and_finance(&first).unwrap();
+        assert_eq!(market.close, 1.0);
+        assert_eq!(profit, &[0.1, 0.2, 0.3, 0.4, 0.5]);
+        assert_eq!(finance.total_market, 100.0);
+        assert!(contract.data(&Index::new(1, Arc::from("2025-01-02"))).is_none());
     }
 
     // 测试板块和指数条件使用并集，任意一项匹配即可保留合约。

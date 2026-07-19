@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use salvo::{cors::Cors, prelude::*};
 use salvo_oapi::{Info, OpenApi, Tag, swagger_ui::SwaggerUi};
 
@@ -22,6 +24,8 @@ pub struct RunCommand {}
 
 impl RunCommand {
     pub(super) async fn execute(self) {
+        let now = Instant::now();
+        println!("开始加载数据库...");
         let router = router::router().await;
         let openapi = build_openapi(&router);
 
@@ -32,6 +36,7 @@ impl RunCommand {
         );
         let addr = CONFIG.socket_addr();
 
+        println!("数据库加载完成，耗时: {:.2?}", now.elapsed());
         println!("WebService running at: http://{addr}");
         println!("Swagger UI: http://{addr}/swagger-ui");
         println!("OpenAPI JSON: http://{addr}/api-doc/openapi.json");

@@ -1,4 +1,4 @@
-//! 总市值因子接口。
+//! 成交额因子接口。
 
 use std::sync::Arc;
 
@@ -7,11 +7,9 @@ use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::Receiver;
 
-use crate::{prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::Json};
+use crate::{db::MarketData, prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::Json};
 
-/// 总市值因子分析请求。
-///
-/// 客户端通常先从 `POST /api/mode1/list` 取得默认结构，再按需修改参数。
+/// 成交额因子分析请求。
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct Req {
     base: Base,
@@ -23,7 +21,7 @@ impl ArgsHandle for Req {
         req.base.filter = filter.clone();
         let value = Arc::from(req.raw_value());
         let key = req.hashcode();
-        let recv = CACHE.get_or_run(key, move || market_value_run(req));
+        let recv = CACHE.get_or_run(key, move || turnover_run(req));
         (value, recv)
     }
 }
@@ -40,58 +38,74 @@ impl Default for Req {
     }
 }
 
-/// 注册总市值因子接口。
-///
-/// 动态 `factor_id` 应通过 `POST /api/mode1/list` 获取。
+/// 注册成交额因子接口，并加入模式一因子列表。
 pub async fn router() -> Router {
     MODE1.register(Arc::new(Req::register)).await;
-    Router::with_path(Req::id()).post(market_value)
+    Router::with_path(Req::id()).post(turnover)
 }
 
-/// 执行总市值因子的分位分析。
+/// 执行成交额因子的分位分析。
 ///
-/// # Analysis
-///
-/// 每个交易日直接读取对齐财务数据中的 `total_market` 作为总市值，
-/// 按总市值从低到高切分为 `base.count` 个分位，因子值单位为元。
+/// 每个交易日按当日成交额从低到高排序，切分为 `base.count` 个分位，
+/// 并返回各分位的平均成交额、平均换手率和四种平均收益。
 #[endpoint(
     tags("模式一"),
-    operation_id = "analyze_market_value",
+    operation_id = "analyze_turnover",
     responses(
-        (status_code = 200, description = "总市值因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "成交额因子分析结果", body = Res<QuantileData>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
     )
 )]
-pub async fn market_value(args: Json<Req>) -> Resp<Arc<RawValue>> {
+pub async fn turnover(args: Json<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
-    match CACHE.get_or_run(key, move || market_value_run(args.0)).recv().await {
+    match CACHE.get_or_run(key, move || turnover_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }
 }
 
-/// 根据总市值计算每日分位数据和四种收益。
-fn market_value_run(args: Req) -> Box<RawValue> {
+fn turnover_run(args: Req) -> Box<RawValue> {
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new("总市值因子", "按总市值从低到高分位", args.base.count);
+    let mut qd = QuantileData::new("成交额因子", "按成交额从低到高分位", args.base.count);
     let mut items = Vec::with_capacity(df.list.len());
 
     for index in df.index_iter() {
         for item in &df.list {
-            if let Some((curr, profit, finance)) = item.data_and_finance(&index)
+            if let Some((curr, profit)) = item.data(&index)
                 && curr.filter_st(args.base.filter_st)
             {
                 items.push(TempItem {
-                    factor: finance.total_market,
+                    factor: turnover_factor(curr),
                     profit,
                 });
             }
         }
         qd.push(index.datetime, &mut items);
-        // items.clear();
-        unsafe { items.set_len(0) }
+        items.clear();
     }
 
     qd.raw_value()
+}
+
+#[inline]
+fn turnover_factor(market: &MarketData) -> f64 {
+    market.turnover
+}
+
+#[cfg(test)]
+mod tests {
+    use super::turnover_factor;
+    use crate::db::MarketData;
+
+    // 测试成交额因子直接使用当日行情成交额。
+    #[test]
+    fn uses_daily_turnover() {
+        let market = MarketData {
+            turnover: 987_654.0,
+            ..Default::default()
+        };
+
+        assert_eq!(turnover_factor(&market), 987_654.0);
+    }
 }

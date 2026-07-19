@@ -19,6 +19,8 @@ import { useGlobalMessageStore } from '@/stores/globalMessage'
 import { createModeFilter, useMode1Store } from '@/stores/mode1'
 import type { ModeRequest, Profit, ProfitMode, QuantileData } from '@/types/mode1'
 
+defineOptions({ name: 'FactorDashboard' })
+
 interface FactorRow {
   id: string
   index: number
@@ -31,6 +33,7 @@ const store = useMode1Store()
 const globalLoading = useGlobalLoadingStore()
 const globalMessage = useGlobalMessageStore()
 const { periods, items, periodLoading, listLoading, periodError, listError } = storeToRefs(store)
+const { visible: globalLoadingVisible } = storeToRefs(globalLoading)
 const searchKeyword = ref('')
 const page = ref(1)
 const pageSize = ref(10)
@@ -60,6 +63,8 @@ const profitModeOptions = [
   { label: '收益3：第二天开盘买，第三天开盘卖', value: 3 },
   { label: '收益4：第二天开盘买，第三天收盘卖', value: 4 },
 ]
+const localPeriodLoading = computed(() => periodLoading.value && !globalLoadingVisible.value)
+const localListLoading = computed(() => listLoading.value && !globalLoadingVisible.value)
 
 const itemCount = computed(() => items.value.length)
 const pageSizeOptions = computed(() => {
@@ -386,7 +391,7 @@ const rowKey = (row: FactorRow) => row.id
             <NSelect
               v-model:value="filters.period"
               :options="periodOptions"
-              :loading="periodLoading"
+              :loading="localPeriodLoading"
               :disabled="periodLoading || listLoading"
               style="width: 140px"
             />
@@ -407,7 +412,7 @@ const rowKey = (row: FactorRow) => row.id
         :columns="columns"
         :data="rows"
         :row-key="rowKey"
-        :loading="listLoading"
+        :loading="localListLoading"
         :bordered="true"
         :single-line="true"
         :pagination="false"

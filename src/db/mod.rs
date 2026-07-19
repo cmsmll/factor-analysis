@@ -71,7 +71,7 @@ impl DataFrameDb {
                 continue;
             };
             let finance = Arc::new(query_finance(finance_conn, range, &index_table)?);
-            align_check(&market, &finance)?;
+            let profit = align_and_build_forward_profit(&metadata.code, &market, &finance);
             let table = market.iter().enumerate().map(|(index, md)| (md.datetime.clone(), index)).collect();
             let start = first.datetime.clone();
             let end = last.datetime.clone();
@@ -83,6 +83,7 @@ impl DataFrameDb {
                 table,
                 market,
                 finance,
+                profit,
             }));
         }
 
@@ -177,12 +178,43 @@ fn query_finance(database: &Connection, range: Option<(&str, &str)>, index_table
     }
 }
 
-fn align_check(market: &[MarketData], finance: &[Finance]) -> Result<()> {
-    if market.len() != finance.len() || !market.iter().zip(finance).all(|(market, finance)| market.datetime == finance.datetime) {
-        return Err(rusqlite::Error::QueryReturnedNoRows);
+fn align_and_build_forward_profit(code: &str, market: &[MarketData], finance: &[Finance]) -> Vec<[f64; 5]> {
+    match try_align_and_build_forward_profit(market, finance) {
+        Ok(profit) => profit,
+        Err(reason) => {
+            eprintln!("股票 {code} 数据对齐失败：{reason}");
+            std::process::exit(0);
+        }
+    }
+}
+
+fn try_align_and_build_forward_profit(market: &[MarketData], finance: &[Finance]) -> std::result::Result<Vec<[f64; 5]>, String> {
+    if market.len() != finance.len() {
+        return Err(format!("行情数量为 {}，财务数量为 {}", market.len(), finance.len()));
     }
 
-    Ok(())
+    for (index, (market, finance)) in market.iter().zip(finance).enumerate() {
+        if market.datetime != finance.datetime {
+            return Err(format!("索引 {index} 的行情日期为 {}，财务日期为 {}", market.datetime, finance.datetime));
+        }
+    }
+
+    Ok(market
+        .windows(3)
+        .map(|window| {
+            let curr = &window[0];
+            let next1 = &window[1];
+            let next2 = &window[2];
+
+            [
+                (next1.close - curr.close) / curr.close,
+                (next1.close - next1.open) / next1.open,
+                (next2.open - next1.open) / next1.open,
+                (next2.close - next1.open) / next1.open,
+                curr.turnover_rate,
+            ]
+        })
+        .collect())
 }
 #[cfg(test)]
 mod tests {
@@ -307,6 +339,13 @@ mod tests {
         assert!(Arc::ptr_eq(&indices[0].datetime, &all_frame.index[0]));
 
         assert_eq!(all_frame.list[0].market.len(), 3);
+        assert_eq!(all_frame.list[0].profit.len(), 1);
+        let [profit1, profit2, profit3, profit4, turnover_rate] = all_frame.list[0].profit[0];
+        assert!((profit1 - 0.1).abs() < 1e-12);
+        assert!((profit2 - 0.1).abs() < 1e-12);
+        assert!((profit3 - 0.1).abs() < 1e-12);
+        assert!((profit4 - 0.2).abs() < 1e-12);
+        assert!((turnover_rate - 0.02).abs() < 1e-12);
         assert_eq!(all_frame.list[0].finance[0].datetime.as_ref(), "2025-01-01");
         assert_eq!(all_frame.list[0].finance[1].datetime.as_ref(), "2025-01-02");
         assert_eq!(frame.list.len(), 1);
@@ -316,6 +355,7 @@ mod tests {
         assert_eq!(frame.list[0].finance[0].datetime.as_ref(), "2025-01-01");
         assert_eq!(frame.list[0].finance[1].datetime.as_ref(), "2025-01-02");
         assert_eq!(range_frame.list[0].market.len(), 2);
+        assert!(range_frame.list[0].profit.is_empty());
         assert_eq!(range_frame.list[0].finance.len(), 2);
         assert_eq!(range_frame.list[0].finance[0].datetime.as_ref(), "2025-01-02");
         assert_eq!(range_frame.list[0].finance[1].datetime.as_ref(), "2025-01-03");
@@ -375,29 +415,17 @@ mod tests {
         assert!(reversed.index.is_empty());
     }
 
-    // 测试财务数据无法覆盖首条行情时查询报错，不使用默认财务数据填充。
+    // 测试行情与财务日期不一致时返回包含索引和日期的错误原因。
     #[test]
-    fn query_rejects_market_without_matching_finance() {
-        let directory = tempdir().unwrap();
-        let metadata_path = directory.path().join("metadata.db");
-        let market_dir = directory.path().join("market");
-        let finance_dir = directory.path().join("finance");
-        std::fs::create_dir_all(&market_dir).unwrap();
-        std::fs::create_dir_all(&finance_dir).unwrap();
-        let market_path = market_dir.join("000004.db");
-        let finance_path = finance_dir.join("000004.db");
+    fn align_rejects_mismatched_dates() {
+        let market = [market("2025-01-01", 10.0)];
+        let finance = [finance("2025-01-02", 100.0)];
 
-        let mut metadata_db = MetadataDb::new(&metadata_path).unwrap();
-        metadata_db.replace_all(&[metadata("000004")]).unwrap();
-        let mut market_db = MarketDataDb::new(&market_path).unwrap();
-        market_db.replace_all(&[market("2025-01-01", 10.0)]).unwrap();
-        let mut finance_db = FinanceDB::new(&finance_path).unwrap();
-        finance_db.replace_all(&[finance("2025-01-02", 100.0)]).unwrap();
+        let error = try_align_and_build_forward_profit(&market, &finance).unwrap_err();
 
-        let db = DataFrameDb::new(&market_dir, &finance_dir, &metadata_path).unwrap();
-
-        assert!(db.query(date(1), date(1)).is_err());
-        assert!(db.query_all().is_err());
+        assert!(error.contains("索引 0"));
+        assert!(error.contains("2025-01-01"));
+        assert!(error.contains("2025-01-02"));
     }
     // 测试行情数据库存在但财务数据库缺失时，构造直接报错且不创建空文件。
     #[test]

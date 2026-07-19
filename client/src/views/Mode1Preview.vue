@@ -41,6 +41,7 @@ const globalMessage = useGlobalMessageStore()
 const filterSelector = useGlobalFilterSelectorStore()
 const { items, listError, periodError } = storeToRefs(mode1Store)
 const { results, statuses, errors } = storeToRefs(previewStore)
+const { visible: globalLoadingVisible } = storeToRefs(globalLoading)
 const requestParams = ref<ModeRequest>()
 const startDate = ref<number | null>(null)
 const endDate = ref<number | null>(null)
@@ -64,6 +65,7 @@ const modeId = computed(() => {
 })
 const factorData = computed(() => results.value[modeId.value])
 const quantileLoading = computed(() => statuses.value[modeId.value] === 'loading')
+const localQuantileLoading = computed(() => quantileLoading.value && !globalLoadingVisible.value)
 const routeFactorName = computed(() => factorData.value?.name || '因子预览')
 const factorDetail = computed(() => buildDetail(factorData.value, null, null, profitMode.value))
 const stats = computed(() => factorDetail.value.stats)
@@ -311,7 +313,7 @@ function goBack() {
         color="#409eff"
         size="small"
         class="reload-btn"
-        :loading="quantileLoading"
+        :loading="localQuantileLoading"
         @click="reloadPreview"
       >
         <template #icon><img :src="RefreshIcon" alt="" class="reload-icon" /></template>
@@ -406,7 +408,7 @@ function goBack() {
       :change-percent="factorDetail.changePercent"
       :quantile-names="factorDetail.quantileNames"
       :quantile-count="quantileCount"
-      :loading="quantileLoading"
+      :loading="localQuantileLoading"
       @update:quantile-count="changeQuantileCount"
     />
 

@@ -13,15 +13,15 @@ pub fn avg_iter(iter: impl IntoIterator<Item = f64>) -> f64 {
     if len == 0 { 0.0 } else { sum / len as f64 }
 }
 
-/// 单次遍历计算固定数量指标的平均值。
-pub fn avg_array<const N: usize>(iter: impl IntoIterator<Item = [f64; N]>) -> [f64; N] {
-    let mut sums = [0.0; N];
+/// 单次遍历计算五项收益指标的平均值。
+pub fn avg_array<'a>(iter: impl IntoIterator<Item = &'a [f64; 5]>) -> [f64; 5] {
+    let mut sums = [0.0; 5];
     let mut len = 0usize;
 
     for values in iter {
         len += 1;
         for (sum, value) in sums.iter_mut().zip(values) {
-            *sum += value;
+            *sum += *value;
         }
     }
 
@@ -58,8 +58,10 @@ mod tests {
     // 测试单次遍历可以同时计算多项指标的平均值。
     #[test]
     fn avg_array_calculates_all_columns() {
-        assert_eq!(avg_array([[1.0, 3.0], [3.0, 5.0]]), [2.0, 4.0]);
-        assert_eq!(avg_array::<2>([]), [0.0, 0.0]);
+        let values = [[1.0, 3.0, 5.0, 7.0, 9.0], [3.0, 5.0, 7.0, 9.0, 11.0]];
+
+        assert_eq!(avg_array(&values), [2.0, 4.0, 6.0, 8.0, 10.0]);
+        assert_eq!(avg_array(std::iter::empty()), [0.0; 5]);
     }
 
     // 测试 SIMD 平均值并处理空切片。

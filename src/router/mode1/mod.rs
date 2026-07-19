@@ -9,7 +9,9 @@ use crate::{MODE1, prelude::*, toolbox::Json};
 pub mod amplitude;
 pub mod manager;
 pub mod market_value;
+pub mod turnover;
 pub mod turnover_rate;
+pub mod volume;
 
 /// 模式一因子的公共请求参数。
 #[derive(Debug, Serialize, Deserialize, ToSchema, Deref)]
@@ -37,6 +39,8 @@ pub async fn mode1_router() -> Router {
         .push(turnover_rate::router().await)
         .push(amplitude::router().await)
         .push(market_value::router().await)
+        .push(volume::router().await)
+        .push(turnover::router().await)
 }
 
 /// 按筛选条件获取模式一因子的请求参数和分析结果。

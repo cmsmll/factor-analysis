@@ -4,7 +4,7 @@ use salvo_oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use crate::math::avg_array;
+use crate::math::{avg_array, avg_iter};
 
 /// 收益信息
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -64,13 +64,9 @@ pub struct QuantileData {
 }
 
 /// 每个股票当期数据
-pub struct TempItem {
-    pub factor: f64,        // 因子值
-    pub turnover_rate: f64, // 当日换手率
-    pub profit1: f64,       // 收益模式1: 当天收盘价买隔天收盘价卖
-    pub profit2: f64,       // 收益模式2: 隔天开盘价买隔天收盘价卖
-    pub profit3: f64,       // 收益模式3: 隔天开盘价买第三天开盘价卖
-    pub profit4: f64,       // 收益模式4: 隔天开盘价买第三天收盘价卖
+pub struct TempItem<'a> {
+    pub factor: f64,
+    pub profit: &'a [f64; 5],
 }
 
 impl QuantileData {
@@ -93,7 +89,7 @@ impl QuantileData {
     }
 
     /// 按因子值排序并切分分位，追加各分位的平均因子、平均换手率和收益。
-    pub fn push(&mut self, datetime: Arc<str>, items: &mut [TempItem]) {
+    pub fn push(&mut self, datetime: Arc<str>, items: &mut [TempItem<'_>]) {
         if items.is_empty() {
             return;
         }
@@ -109,11 +105,8 @@ impl QuantileData {
             };
 
             let group = unsafe { items.get_unchecked(start..end) };
-            let [factor, turnover_rate, profit1, profit2, profit3, profit4] = avg_array(
-                group
-                    .iter()
-                    .map(|item| [item.factor, item.turnover_rate, item.profit1, item.profit2, item.profit3, item.profit4]),
-            );
+            let factor = avg_iter(group.iter().map(|item| item.factor));
+            let [profit1, profit2, profit3, profit4, turnover_rate] = avg_array(group.iter().map(|item| item.profit));
 
             self.factor[index].push(factor);
             self.turnover_rate[index].push(turnover_rate);
@@ -136,15 +129,17 @@ impl QuantileData {
 mod tests {
     use super::*;
 
-    fn item(factor: f64) -> TempItem {
-        TempItem {
-            factor,
-            turnover_rate: factor * 10.0,
-            profit1: factor / 100.0,
-            profit2: factor / 10.0,
-            profit3: -factor / 100.0,
-            profit4: factor,
-        }
+    fn profit(factor: f64) -> [f64; 5] {
+        [factor / 100.0, factor / 10.0, -factor / 100.0, factor, factor * 10.0]
+    }
+
+    fn items<'a>(factors: &[f64], profits: &'a [[f64; 5]]) -> Vec<TempItem<'a>> {
+        factors
+            .iter()
+            .copied()
+            .zip(profits)
+            .map(|(factor, profit)| TempItem { factor, profit })
+            .collect()
     }
 
     // 测试 new 保存策略信息，并按分位数量初始化所有数据容器。
@@ -170,7 +165,9 @@ mod tests {
     #[test]
     fn quantile_push_sorts_and_splits_items() {
         let mut data = QuantileData::new("测试策略", "两分位", 2);
-        let mut items = vec![item(4.0), item(1.0), item(3.0), item(2.0)];
+        let factors = [4.0, 1.0, 3.0, 2.0];
+        let profits = factors.map(profit);
+        let mut items = items(&factors, &profits);
 
         data.push(Arc::from("2025-01-01"), &mut items);
 
@@ -190,7 +187,9 @@ mod tests {
     #[test]
     fn quantile_push_uses_integer_boundaries() {
         let mut data = QuantileData::new("测试策略", "三分位", 3);
-        let mut items = vec![item(5.0), item(1.0), item(4.0), item(2.0), item(3.0)];
+        let factors = [5.0, 1.0, 4.0, 2.0, 3.0];
+        let profits = factors.map(profit);
+        let mut items = items(&factors, &profits);
 
         data.push(Arc::from("2025-01-02"), &mut items);
 
@@ -201,7 +200,9 @@ mod tests {
     #[test]
     fn quantile_push_shares_items_when_count_is_insufficient() {
         let mut data = QuantileData::new("测试策略", "四分位", 4);
-        let mut items = vec![item(3.0), item(1.0)];
+        let factors = [3.0, 1.0];
+        let profits = factors.map(profit);
+        let mut items = items(&factors, &profits);
 
         data.push(Arc::from("2025-01-03"), &mut items);
 
@@ -215,7 +216,7 @@ mod tests {
     #[test]
     fn quantile_push_ignores_empty_items() {
         let mut data = QuantileData::new("测试策略", "空数据", 3);
-        let mut items = Vec::new();
+        let mut items: Vec<TempItem<'_>> = Vec::new();
 
         data.push(Arc::from("2025-01-04"), &mut items);
 
