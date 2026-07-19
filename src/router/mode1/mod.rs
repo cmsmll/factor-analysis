@@ -1,5 +1,6 @@
 //! 模式一：按照因子值排序并进行分位分析。
 
+use derive_more::Deref;
 use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
 
@@ -11,13 +12,14 @@ pub mod market_value;
 pub mod turnover_rate;
 
 /// 模式一因子的公共请求参数。
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Deref)]
 pub struct Base {
     /// 动态接口 ID，应使用 `/api/mode1/list` 返回的值。
     pub id: String,
     /// 分位数量，调用方应保证大于等于 1。
     pub count: usize,
     /// 股票池与日期筛选条件。
+    #[deref]
     pub filter: Filter,
 }
 

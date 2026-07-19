@@ -98,11 +98,12 @@ pub async fn amplitude(args: Json<Req>) -> Resp<Arc<RawValue>> {
 fn amplitude_run(args: Req) -> Box<RawValue> {
     let df = DF.filter(&args.base.filter);
     let mut qd = QuantileData::new("振幅因子", "按振幅从低到高分位", args.base.count);
+    let mut items = Vec::with_capacity(df.list.len());
 
     for index in df.index_iter() {
-        let mut items = Vec::with_capacity(df.list.len());
         for item in &df.list {
             if let Some(curr) = item.data(&index)
+                && curr.filter_st(args.base.filter_st)
                 && let Some(next1) = curr.after(1)
                 && let Some(next2) = curr.after(2)
             {
@@ -121,7 +122,9 @@ fn amplitude_run(args: Req) -> Box<RawValue> {
                 });
             }
         }
-        qd.push(index.datetime, items);
+        qd.push(index.datetime, &mut items);
+        // items.clear();
+        unsafe { items.set_len(0) }
     }
 
     qd.raw_value()

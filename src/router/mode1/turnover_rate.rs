@@ -61,7 +61,7 @@ pub async fn router() -> Router {
 ///
 /// 请求头必须包含 `Content-Type: application/json`。请求体使用 [`Req`]，其中 `base` 包含动态接口 ID、分位数量和筛选条件：
 /// 日期按 `YYYY-MM-DD` 解析；`filter_bz = true` 时排除北京证券交易所；
-/// `sector` 与 `indice` 非空时按并集筛选；`filter_st` 为 `true` 时排除名称中包含 `ST` 的合约。
+/// `sector` 与 `indice` 非空时按并集筛选；`filter_st` 为 `true` 时排除当日处于 ST 状态的股票。
 ///
 /// # Analysis
 ///
@@ -98,11 +98,12 @@ pub async fn turnover_rate(args: Json<Req>) -> Resp<Arc<RawValue>> {
 fn turnover_rate_run(args: Req) -> Box<RawValue> {
     let df = DF.filter(&args.base.filter);
     let mut qd: QuantileData = QuantileData::new("换手率因子", "按换手率从低到高分位", args.base.count);
+    let mut items = Vec::with_capacity(df.list.len());
 
     for index in df.index_iter() {
-        let mut items = Vec::with_capacity(df.list.len());
         for item in &df.list {
             if let Some(curr) = item.data(&index)
+                && curr.filter_st(args.base.filter_st)
                 && let Some(next1) = curr.after(1)
                 && let Some(next2) = curr.after(2)
             {
@@ -121,7 +122,9 @@ fn turnover_rate_run(args: Req) -> Box<RawValue> {
                 });
             }
         }
-        qd.push(index.datetime, items);
+        qd.push(index.datetime, &mut items);
+        // items.clear();
+        unsafe { items.set_len(0) }
     }
 
     qd.raw_value()

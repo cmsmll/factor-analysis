@@ -98,8 +98,9 @@ async fn test() -> Resp<Arc<RawValue>> {
 fn test_run() -> Box<RawValue> {
     let df = DF.range(date!(2025 - 01 - 01), date!(2025 - 12 - 31));
     let mut qd: QuantileData = QuantileData::new("测试换手率因子", "", 5);
+    let mut items = Vec::with_capacity(df.list.len());
+
     for index in df.index_iter() {
-        let mut items = Vec::with_capacity(df.list.len());
         for item in &df.list {
             if let Some(curr) = item.data(&index)
                 && let Some(next1) = curr.after(1)
@@ -120,7 +121,8 @@ fn test_run() -> Box<RawValue> {
                 });
             }
         }
-        qd.push(index.datetime, items);
+        qd.push(index.datetime, &mut items);
+        items.clear();
     }
 
     qd.raw_value()

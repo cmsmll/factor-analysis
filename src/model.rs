@@ -93,27 +93,28 @@ impl QuantileData {
     }
 
     /// 按因子值排序并切分分位，追加各分位的平均因子、平均换手率和收益。
-    pub fn push(&mut self, datetime: Arc<str>, mut items: Vec<TempItem>) {
+    pub fn push(&mut self, datetime: Arc<str>, items: &mut [TempItem]) {
         if items.is_empty() {
             return;
         }
 
         items.sort_unstable_by(|left, right| left.factor.total_cmp(&right.factor));
 
-        let groups: Vec<&[TempItem]> = if items.len() < self.count {
-            vec![items.as_slice(); self.count]
-        } else {
-            let len = items.len();
-            let count = self.count;
-            (0..count).map(|i| &items[i * len / count..(i + 1) * len / count]).collect()
-        };
+        let len = items.len();
+        for index in 0..self.count {
+            let (start, end) = if len < self.count {
+                (0, len)
+            } else {
+                (index * len / self.count, (index + 1) * len / self.count)
+            };
 
-        for (index, group) in groups.into_iter().enumerate() {
+            let group = unsafe { items.get_unchecked(start..end) };
             let [factor, turnover_rate, profit1, profit2, profit3, profit4] = avg_array(
                 group
                     .iter()
                     .map(|item| [item.factor, item.turnover_rate, item.profit1, item.profit2, item.profit3, item.profit4]),
             );
+
             self.factor[index].push(factor);
             self.turnover_rate[index].push(turnover_rate);
             self.profit1[index].push(profit1);
@@ -165,13 +166,15 @@ mod tests {
         assert!(data.turnover_rate.iter().all(Vec::is_empty));
     }
 
-    // 测试 push 取得 Item 所有权，按因子排序后切分并追加平均数据。
+    // 测试 push 原地排序可变切片，按因子切分并追加平均数据。
     #[test]
     fn quantile_push_sorts_and_splits_items() {
         let mut data = QuantileData::new("测试策略", "两分位", 2);
+        let mut items = vec![item(4.0), item(1.0), item(3.0), item(2.0)];
 
-        data.push(Arc::from("2025-01-01"), vec![item(4.0), item(1.0), item(3.0), item(2.0)]);
+        data.push(Arc::from("2025-01-01"), &mut items);
 
+        assert_eq!(items.iter().map(|item| item.factor).collect::<Vec<_>>(), [1.0, 2.0, 3.0, 4.0]);
         assert_eq!(data.datetime[0].as_ref(), "2025-01-01");
         assert_eq!(data.factor, [vec![1.5], vec![3.5]]);
         assert_eq!(data.turnover_rate, [vec![15.0], vec![35.0]]);
@@ -187,8 +190,9 @@ mod tests {
     #[test]
     fn quantile_push_uses_integer_boundaries() {
         let mut data = QuantileData::new("测试策略", "三分位", 3);
+        let mut items = vec![item(5.0), item(1.0), item(4.0), item(2.0), item(3.0)];
 
-        data.push(Arc::from("2025-01-02"), vec![item(5.0), item(1.0), item(4.0), item(2.0), item(3.0)]);
+        data.push(Arc::from("2025-01-02"), &mut items);
 
         assert_eq!(data.factor, [vec![1.0], vec![2.5], vec![4.5]]);
     }
@@ -197,8 +201,9 @@ mod tests {
     #[test]
     fn quantile_push_shares_items_when_count_is_insufficient() {
         let mut data = QuantileData::new("测试策略", "四分位", 4);
+        let mut items = vec![item(3.0), item(1.0)];
 
-        data.push(Arc::from("2025-01-03"), vec![item(3.0), item(1.0)]);
+        data.push(Arc::from("2025-01-03"), &mut items);
 
         assert_eq!(data.factor, [vec![2.0], vec![2.0], vec![2.0], vec![2.0]]);
         assert_eq!(data.turnover_rate, [vec![20.0], vec![20.0], vec![20.0], vec![20.0]]);
@@ -210,8 +215,9 @@ mod tests {
     #[test]
     fn quantile_push_ignores_empty_items() {
         let mut data = QuantileData::new("测试策略", "空数据", 3);
+        let mut items = Vec::new();
 
-        data.push(Arc::from("2025-01-04"), Vec::new());
+        data.push(Arc::from("2025-01-04"), &mut items);
 
         assert!(data.datetime.is_empty());
         assert!(data.factor.iter().all(Vec::is_empty));

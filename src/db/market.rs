@@ -42,6 +42,12 @@ pub struct MarketData {
 }
 
 impl MarketData {
+    /// 根据 ST 过滤开关判断是否保留当日行情，返回 `true` 时保留。
+    #[inline]
+    pub fn filter_st(&self, filter_st: bool) -> bool {
+        !filter_st || !self.is_st
+    }
+
     pub fn parse(data: BTreeSet<String>) -> io::Result<Vec<Self>> {
         if data.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "TBF 数据中没有完整记录"));
@@ -374,6 +380,19 @@ mod tests {
             turnover_rate: 0.02,
             is_st: false,
         }
+    }
+
+    // 测试未启用过滤时保留全部行情，启用后仅过滤当日 ST 行情。
+    #[test]
+    fn filter_st_uses_daily_market_status() {
+        let normal = market("2025-01-01", 10.0);
+        let mut st = market("2025-01-01", 10.0);
+        st.is_st = true;
+
+        assert!(normal.filter_st(false));
+        assert!(st.filter_st(false));
+        assert!(normal.filter_st(true));
+        assert!(!st.filter_st(true));
     }
 
     // 测试范围查询包含 end 当天，并排除 end 的下一天。
