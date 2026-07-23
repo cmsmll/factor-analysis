@@ -18,6 +18,9 @@ use time::{Date, format_description::well_known::Iso8601};
 
 use crate::config::Config;
 
+/// 行情数据及对应的前向收益。
+type MarketWithProfit = (Vec<MarketData>, Vec<[f64; 5]>);
+
 pub struct DataFrameDb {
     /// 行情数据库，与 metadata 使用相同顺序。
     pub market: Vec<Connection>,
@@ -67,15 +70,21 @@ impl DataFrameDb {
         let mut index_table = BTreeSet::new();
 
         for ((market_conn, finance_conn), metadata) in self.market.iter().zip(self.finance.iter()).zip(self.metadata.iter()) {
-            let market = Arc::new(query_market(market_conn, range, &mut index_table)?);
-            let Some((first, last)) = market.first().zip(market.last()) else {
+            // 先加载财务数据
+            let Some(finance) = load_finance(finance_conn, range)? else {
                 continue;
             };
-            let finance = Arc::new(query_finance(finance_conn, range, &index_table)?);
-            let profit = align_and_build_forward_profit(&metadata.code, &market, &finance);
-            let table = market.iter().enumerate().map(|(index, md)| (md.datetime, index)).collect::<FxHashMap<_, _>>();
-            let start = first.datetime;
-            let end = last.datetime;
+            let finance = Arc::new(finance);
+
+            // 加载行情数据，同时检查对齐并计算收益
+            let Some((market, profit)) = load_market_with_profit(market_conn, range, &mut index_table, &finance, &metadata.code)? else {
+                continue;
+            };
+            let market = Arc::new(market);
+
+            let table = market.iter().enumerate().map(|(i, md)| (md.datetime, i)).collect::<FxHashMap<_, _>>();
+            let start = market[0].datetime;
+            let end = market[market.len() - 1].datetime;
 
             list.push(Arc::new(Contract {
                 start,
@@ -90,7 +99,6 @@ impl DataFrameDb {
 
         let start = *index_table.first().ok_or(rusqlite::Error::QueryReturnedNoRows)?;
         let end = *index_table.last().ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-
 
         let (sector, indice) = dataframe::collect_metadata_lists(&list);
 
@@ -148,7 +156,7 @@ fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table:
     }
 }
 
-fn query_finance(database: &Connection, range: Option<(&str, &str)>, _index_table: &BTreeSet<Date>) -> Result<Vec<Finance>> {
+fn query_finance(database: &Connection, range: Option<(&str, &str)>) -> Result<Vec<Finance>> {
     let sql = if range.is_some() {
         include_str!("sql/finance_query_range.sql")
     } else {
@@ -176,34 +184,44 @@ fn query_finance(database: &Connection, range: Option<(&str, &str)>, _index_tabl
     }
 }
 
-fn align_and_build_forward_profit(code: &str, market: &[MarketData], finance: &[Finance]) -> Vec<[f64; 5]> {
-    match try_align_and_build_forward_profit(market, finance) {
-        Ok(profit) => profit,
-        Err(reason) => {
-            eprintln!("股票 {code} 数据对齐失败：{reason}");
+/// 加载财务数据，空结果返回 None。
+fn load_finance(database: &Connection, range: Option<(&str, &str)>) -> Result<Option<Vec<Finance>>> {
+    let data = query_finance(database, range)?;
+    if data.is_empty() { Ok(None) } else { Ok(Some(data)) }
+}
+
+/// 加载行情数据，同时检查与财务数据的对齐并计算前向收益。
+fn load_market_with_profit(
+    database: &Connection,
+    range: Option<(&str, &str)>,
+    index_table: &mut BTreeSet<Date>,
+    finance: &[Finance],
+    code: &str,
+) -> Result<Option<MarketWithProfit>> {
+    let market = query_market(database, range, index_table)?;
+    if market.is_empty() {
+        return Ok(None);
+    }
+
+    // 对齐检查
+    if market.len() != finance.len() {
+        eprintln!("股票 {code} 数据对齐失败：行情数量为 {}，财务数量为 {}", market.len(), finance.len());
+        std::process::exit(0);
+    }
+    for (i, (md, fin)) in market.iter().zip(finance).enumerate() {
+        if md.datetime != fin.datetime {
+            eprintln!("股票 {code} 数据对齐失败：索引 {i} 的行情日期为 {}，财务日期为 {}", md.datetime, fin.datetime);
             std::process::exit(0);
         }
     }
-}
 
-fn try_align_and_build_forward_profit(market: &[MarketData], finance: &[Finance]) -> std::result::Result<Vec<[f64; 5]>, String> {
-    if market.len() != finance.len() {
-        return Err(format!("行情数量为 {}，财务数量为 {}", market.len(), finance.len()));
-    }
-
-    for (index, (market, finance)) in market.iter().zip(finance).enumerate() {
-        if market.datetime != finance.datetime {
-            return Err(format!("索引 {index} 的行情日期为 {}，财务日期为 {}", market.datetime, finance.datetime));
-        }
-    }
-
-    Ok(market
+    // 计算前向收益
+    let profit = market
         .windows(3)
-        .map(|window| {
-            let curr = &window[0];
-            let next1 = &window[1];
-            let next2 = &window[2];
-
+        .map(|w| {
+            let curr = &w[0];
+            let next1 = &w[1];
+            let next2 = &w[2];
             [
                 (next1.close - curr.close) / curr.close,
                 (next1.close - next1.open) / next1.open,
@@ -212,7 +230,9 @@ fn try_align_and_build_forward_profit(market: &[MarketData], finance: &[Finance]
                 curr.turnover_rate,
             ]
         })
-        .collect())
+        .collect();
+
+    Ok(Some((market, profit)))
 }
 #[cfg(test)]
 mod tests {
@@ -413,18 +433,7 @@ mod tests {
         assert!(reversed.index.is_empty());
     }
 
-    // 测试行情与财务日期不一致时返回包含索引和日期的错误原因。
-    #[test]
-    fn align_rejects_mismatched_dates() {
-        let market = [market("2025-01-01", 10.0)];
-        let finance = [finance("2025-01-02", 100.0)];
 
-        let error = try_align_and_build_forward_profit(&market, &finance).unwrap_err();
-
-        assert!(error.contains("索引 0"));
-        assert!(error.contains("2025-01-01"));
-        assert!(error.contains("2025-01-02"));
-    }
     // 测试行情数据库存在但财务数据库缺失时，构造直接报错且不创建空文件。
     #[test]
     fn new_rejects_missing_finance_database() {

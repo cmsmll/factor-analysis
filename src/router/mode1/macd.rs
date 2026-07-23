@@ -70,7 +70,7 @@ impl Req {
         req.base.filter = filter.clone();
         let value = Arc::from(req.raw_value());
         let key = req.hashcode();
-        let recv = CACHE.get_or_run(key, move || macd_run(req));
+        let recv = MODE1.cache.get_or_run(key, move || macd_run(req));
         (value, recv)
     }
 }
@@ -109,7 +109,7 @@ pub async fn router() -> Router {
 )]
 pub async fn macd(args: VJson<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
-    match CACHE.get_or_run(key, move || macd_run(args.0)).recv().await {
+    match MODE1.cache.get_or_run(key, move || macd_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }

@@ -178,6 +178,9 @@ fn default_periods() -> Vec<Period> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DataConfig {
+    /// 缓存根目录。
+    #[serde(default = "default_cache_dir")]
+    pub cache: PathBuf,
     /// 行情数据库目录。
     pub market: PathBuf,
     /// 财务数据库目录。
@@ -192,9 +195,12 @@ pub struct DataConfig {
     pub tbf_metadata: PathBuf,
 }
 
+fn default_cache_dir() -> PathBuf { PathBuf::from("cache") }
+
 impl Default for DataConfig {
     fn default() -> Self {
         Self {
+            cache: default_cache_dir(),
             market: PathBuf::from("data/database/market"),
             finance: PathBuf::from("data/database/finance"),
             metadata: PathBuf::from("data/database/metadata.db"),

@@ -1,3 +1,4 @@
+use std::fs;
 use std::time::Instant;
 
 use salvo::{cors::Cors, prelude::*};
@@ -20,10 +21,21 @@ pub(crate) fn build_openapi(router: &Router) -> OpenApi {
 
 /// Web 服务运行命令。
 #[derive(Debug, clap::Args)]
-pub struct RunCommand {}
+pub struct RunCommand {
+    /// 启动前清空缓存
+    #[arg(short = 'c', long)]
+    pub clear: bool,
+}
 
 impl RunCommand {
     pub(super) async fn execute(self) {
+        if self.clear {
+            println!("正在清空缓存...");
+            if CONFIG.data.cache.exists() && let Err(err) = fs::remove_dir_all(&CONFIG.data.cache) {
+                eprintln!("清空缓存失败: {err}");
+            }
+        }
+
         let now = Instant::now();
         println!("正在加载数据库...");
         let router = router::router().await;

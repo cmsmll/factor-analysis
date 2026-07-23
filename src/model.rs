@@ -1,4 +1,3 @@
-
 use salvo_oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -66,7 +65,7 @@ pub struct QuantileData {
     pub profit2: Vec<Profit>,         // 收益模式2: 隔天开盘价买隔天收盘价卖
     pub profit3: Vec<Profit>,         // 收益模式3: 隔天开盘价买第三天开盘价卖
     pub profit4: Vec<Profit>,         // 收益模式4: 隔天开盘价买第三天收盘价卖
-    pub datetime: Vec<Date>,      // 日期时间
+    pub datetime: Vec<Date>,          // 日期时间
 }
 
 /// 每个股票当期数据
@@ -152,9 +151,6 @@ impl QuantileData {
     }
 }
 
-
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,7 +185,10 @@ mod tests {
     #[test]
     fn raw_value_updates_annualized_profit_by_datetime_span() {
         let mut data = QuantileData::new("测试策略", "年化", 1);
-        data.datetime = vec![Date::from_calendar_date(2025, time::Month::January, 1).unwrap(), Date::from_calendar_date(2025, time::Month::January, 31).unwrap()];
+        data.datetime = vec![
+            Date::from_calendar_date(2025, time::Month::January, 1).unwrap(),
+            Date::from_calendar_date(2025, time::Month::January, 31).unwrap(),
+        ];
         data.profit1[0].push(0.1);
         data.profit2[0].push(0.2);
 

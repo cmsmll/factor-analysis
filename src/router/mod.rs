@@ -12,7 +12,7 @@ use serde_json::value::RawValue;
 use time::macros::date;
 
 use crate::{
-    CACHE, CONFIG, DF,
+    CONFIG, DF, MODE1,
     config::Period,
     model::{QuantileData, TempItem},
     reject, res, resolve,
@@ -88,7 +88,7 @@ async fn hello() -> Resp<&'static str> {
     )
 )]
 async fn test() -> Resp<Arc<RawValue>> {
-    match CACHE.get_or_run(Arc::from("test"), test_run).recv().await {
+    match MODE1.cache.get_or_run(Arc::from("test"), test_run).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }

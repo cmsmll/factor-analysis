@@ -30,6 +30,22 @@ impl Cache {
             }),
         }
     }
+
+    /// 基于根目录创建子目录缓存，目录不存在则自动创建。
+    pub fn sub(root: &std::path::Path, name: &str) -> io::Result<Self> {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir)?;
+        Ok(Self::new(dir))
+    }
+
+    /// 清空缓存目录（包括所有缓存文件）。
+    pub fn clear(&self) -> io::Result<()> {
+        let dir = &self.inner.directory;
+        if dir.exists() {
+            fs::remove_dir_all(dir)?;
+        }
+        Ok(())
+    }
     pub fn get(&self, args: &str) -> Option<Receiver<Arc<RawValue>>> {
         let receiver = {
             let running = self.inner.running.lock().unwrap();

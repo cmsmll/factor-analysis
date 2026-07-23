@@ -15,13 +15,11 @@ pub use app::{App, ParseCommand, RunCommand, TestCommand};
 pub use toolbox::*;
 
 use crate::{
-    cache::Cache,
     config::Config,
     db::{DataFrame, DataFrameDb},
     router::mode1::manager::Mode1Manager,
 };
 
 pub static CONFIG: LazyLock<Config> = LazyLock::new(Config::load_or_gen_default);
-pub static CACHE: LazyLock<Cache> = LazyLock::new(|| Cache::new("cache"));
 pub static DF: LazyLock<DataFrame> = LazyLock::new(|| DataFrameDb::from_config(&CONFIG).unwrap().query_all().unwrap());
-pub static MODE1: LazyLock<Mode1Manager> = LazyLock::new(Default::default);
+pub static MODE1: LazyLock<Mode1Manager> = LazyLock::new(|| Mode1Manager::new(&CONFIG.data.cache));

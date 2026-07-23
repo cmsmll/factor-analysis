@@ -1,5 +1,5 @@
 //! Mode1列表数据管理
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -8,7 +8,7 @@ use tokio::{
     task::JoinSet,
 };
 
-use crate::args::Filter;
+use crate::{args::Filter, cache::Cache};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListItem {
@@ -20,12 +20,16 @@ type Mode1Fn = Arc<dyn Fn(&Filter) -> (Arc<RawValue>, Receiver<Arc<RawValue>>) +
 
 pub struct Mode1Manager {
     inner: RwLock<Vec<Mode1Fn>>,
+    pub cache: Cache,
+    pub _check_cache: Cache,
 }
 
-impl Default for Mode1Manager {
-    fn default() -> Self {
+impl Mode1Manager {
+    pub fn new(base: &Path) -> Self {
         Self {
             inner: RwLock::new(Vec::new()),
+            cache: Cache::sub(base, "mode1").expect("创建 mode1 缓存目录失败"),
+            _check_cache: Cache::sub(base, "mode1-check").expect("创建 mode1-check 缓存目录失败"),
         }
     }
 }

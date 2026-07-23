@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use derive_more::Deref;
 use rustc_hash::FxHashMap;
@@ -113,10 +110,7 @@ pub struct Index {
 
 impl Index {
     pub fn new(index: usize, datetime: Date) -> Self {
-        Self {
-            index,
-            datetime,
-        }
+        Self { index, datetime }
     }
 }
 
@@ -175,12 +169,16 @@ impl Contract {
 
     pub fn data(&self, i: &Index) -> Option<(&MarketData, &[f64; 5])> {
         let index = self.index(i)?;
-        Some((self.market.get(index)?, self.profit.get(index)?))
+        // 时间表能找到索引必然在范围内
+        let market = unsafe { self.market.get_unchecked(index) };
+        Some((market, self.profit.get(index)?))
     }
 
     pub fn data_and_finance(&self, i: &Index) -> Option<(&MarketData, &[f64; 5], &Finance)> {
         let index = self.index(i)?;
-        Some((self.market.get(index)?, self.profit.get(index)?, self.finance.get(index)?))
+        // 时间表能找到索引必然在范围内
+        let market = unsafe { self.market.get_unchecked(index) };
+        Some((market, self.profit.get(index)?, self.finance.get(index)?))
     }
 }
 #[cfg(test)]

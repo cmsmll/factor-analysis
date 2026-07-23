@@ -212,6 +212,7 @@ mod tests {
             server: ServerConfig::default(),
             period: Vec::new(),
             data: DataConfig {
+                cache: PathBuf::from("test_cache"),
                 market: directory.path().join("database/market"),
                 finance: directory.path().join("database/finance"),
                 metadata: directory.path().join("database/metadata.db"),

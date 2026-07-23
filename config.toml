@@ -1,0 +1,31 @@
+[server]
+addr = "127.0.0.1"
+port = 7878
+
+[[period]]
+name = "最近一年"
+start = "2025-01-01"
+end = "2025-12-31"
+
+[[period]]
+name = "最近三年"
+start = "2023-01-01"
+end = "2025-12-31"
+
+[[period]]
+name = "最近五年"
+start = "2021-01-01"
+end = "2025-12-31"
+
+[[period]]
+name = "最近十年"
+start = "2016-01-01"
+end = "2025-12-31"
+
+[data]
+market = "E:/stockdata/database/market"
+finance = "E:/stockdata/database/finance"
+metadata = "E:/stockdata/database/metadata.db"
+tbf_market = "E:/stockdata/tbf/market"
+tbf_finance = "E:/stockdata/tbf/finance"
+tbf_metadata = "E:/stockdata/tbf/metadata"
