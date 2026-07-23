@@ -8,6 +8,8 @@ import {
   NDatePicker,
   NForm,
   NFormItem,
+  NInput,
+  NInputNumber,
   NRadioButton,
   NRadioGroup,
   NSelect,
@@ -29,7 +31,14 @@ import { useGlobalMessageStore } from '@/stores/globalMessage'
 import { useGlobalFilterSelectorStore } from '@/stores/globalFilterSelector'
 import { useMode1Store } from '@/stores/mode1'
 import { useMode1PreviewStore } from '@/stores/mode1Preview'
-import type { ModeRequest, ProfitMode, QuantileCount } from '@/types/mode1'
+import type {
+  CoreArg,
+  CoreValue,
+  ModeListItem,
+  ModeRequest,
+  ProfitMode,
+  QuantileCount,
+} from '@/types/mode1'
 import { formatDate } from '@/utils/factorSeries'
 
 const route = useRoute()
@@ -52,6 +61,15 @@ const quantileCount = ref<number>(5)
 const sectorOptions = ref<string[]>()
 const indiceOptions = ref<string[]>()
 let settingRequestDates = false
+type CoreInputType = 'boolean' | 'number' | 'text'
+
+interface CoreParamItem {
+  key: string
+  name: string
+  value: CoreValue
+  inputType: CoreInputType
+  integer: boolean
+}
 const profitModeOptions = [
   { label: '收益1：当天收盘买，第二天收盘卖', value: 1 },
   { label: '收益2：第二天开盘买，第二天收盘卖', value: 2 },
@@ -67,12 +85,31 @@ const factorData = computed(() => results.value[modeId.value])
 const quantileLoading = computed(() => statuses.value[modeId.value] === 'loading')
 const localQuantileLoading = computed(() => quantileLoading.value && !globalLoadingVisible.value)
 const routeFactorName = computed(() => factorData.value?.name || '因子预览')
+const routeFactorInfo = computed(() => factorData.value?.info || routeFactorName.value)
 const factorDetail = computed(() => buildDetail(factorData.value, null, null, profitMode.value))
 const stats = computed(() => factorDetail.value.stats)
 const previewFilter = computed(() => requestParams.value?.base.filter)
+const coreParams = computed<CoreParamItem[]>(() => {
+  const core = requestParams.value?.core
+  if (!core) return []
+
+  return Object.entries(core).flatMap(([key, arg]) => {
+    if (!isCoreArg(arg)) return []
+
+    return [
+      {
+        key,
+        name: arg.name || key,
+        value: arg.value,
+        inputType: coreInputType(arg.value),
+        integer: typeof arg.value === 'number' && Number.isInteger(arg.value),
+      },
+    ]
+  })
+})
 
 watch(
-  modeId,
+  () => [modeId.value, route.query.item],
   () => {
     requestParams.value = undefined
     startDate.value = null
@@ -112,7 +149,7 @@ async function loadPreview() {
       if (periodError.value) throw new Error(periodError.value)
       if (listError.value) throw new Error(listError.value)
 
-      const source = items.value.find((item) => item.args.base.id === modeId.value)
+      const source = findPreviewSource()
       if (!source) throw new Error('没有找到对应的因子列表数据')
 
       const params = structuredClone(source.args)
@@ -128,6 +165,56 @@ async function loadPreview() {
 
 function isQuantileCount(value: number): value is QuantileCount {
   return value === 3 || value === 5 || value === 10
+}
+
+function isCoreArg(value: unknown): value is CoreArg {
+  if (!value || typeof value !== 'object') return false
+  const arg = value as Partial<CoreArg>
+  const valueType = typeof arg.value
+  return (
+    typeof arg.name === 'string' &&
+    (valueType === 'string' || valueType === 'number' || valueType === 'boolean')
+  )
+}
+
+function coreInputType(value: CoreValue): CoreInputType {
+  if (typeof value === 'boolean') return 'boolean'
+  if (typeof value === 'number') return 'number'
+  return 'text'
+}
+
+function findPreviewSource(): ModeListItem | undefined {
+  const index = routeItemIndex()
+  if (index !== undefined) return items.value[index]
+  return items.value.find((item) => item.args.base.id === modeId.value)
+}
+
+function routeItemIndex(): number | undefined {
+  const value = route.query.item
+  const raw = Array.isArray(value) ? value[0] : value
+  if (!raw) return undefined
+
+  const index = Number(raw)
+  if (!Number.isInteger(index) || index < 0 || index >= items.value.length) return undefined
+  return items.value[index]?.args.base.id === modeId.value ? index : undefined
+}
+
+function updateCoreParam(key: string, value: CoreValue | null): void {
+  const target = requestParams.value?.core?.[key]
+  if (!isCoreArg(target)) return
+
+  if (typeof target.value === 'number') {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return
+    target.value = Number.isInteger(target.value) ? Math.trunc(value) : value
+    return
+  }
+
+  if (typeof target.value === 'boolean') {
+    if (typeof value === 'boolean') target.value = value
+    return
+  }
+
+  if (typeof value === 'string') target.value = value
 }
 
 async function changeQuantileCount(value: number) {
@@ -307,7 +394,9 @@ function goBack() {
         </template>
         返回
       </NButton>
-      <h2 class="factor-title">{{ routeFactorName || factorDetail.factorName }}</h2>
+      <h2 class="factor-title" :title="routeFactorInfo">
+        {{ routeFactorName || factorDetail.factorName }}
+      </h2>
       <NButton
         type="primary"
         color="#409eff"
@@ -348,6 +437,33 @@ function goBack() {
               previewFilter.indice.length ? `已选 ${previewFilter.indice.length} 项` : '全部指数'
             }}
           </NButton>
+        </NFormItem>
+        <NFormItem v-for="param in coreParams" :key="param.key" :label="param.name">
+          <NInputNumber
+            v-if="param.inputType === 'number'"
+            :value="param.value as number"
+            :precision="param.integer ? 0 : undefined"
+            :show-button="false"
+            size="small"
+            class="core-input"
+            @update:value="(value) => updateCoreParam(param.key, value)"
+          />
+          <NRadioGroup
+            v-else-if="param.inputType === 'boolean'"
+            :value="param.value as boolean"
+            size="small"
+            @update:value="(value) => updateCoreParam(param.key, value as boolean)"
+          >
+            <NRadioButton :value="false">否</NRadioButton>
+            <NRadioButton :value="true">是</NRadioButton>
+          </NRadioGroup>
+          <NInput
+            v-else
+            :value="param.value as string"
+            size="small"
+            class="core-input"
+            @update:value="(value) => updateCoreParam(param.key, value)"
+          />
         </NFormItem>
       </NForm>
     </div>
@@ -509,6 +625,10 @@ function goBack() {
 .selector-button {
   min-width: 112px;
   color: #409eff;
+}
+
+.core-input {
+  width: 112px;
 }
 
 .stats-header {

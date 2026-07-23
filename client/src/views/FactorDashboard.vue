@@ -14,15 +14,26 @@ import {
   type DataTableColumns,
 } from 'naive-ui'
 
+import RefreshIcon from '@/assets/icons/refresh.svg'
+import { fetchIndices, fetchSectors } from '@/api/mode1'
 import { useGlobalLoadingStore } from '@/stores/globalLoading'
 import { useGlobalMessageStore } from '@/stores/globalMessage'
+import { useGlobalFilterSelectorStore } from '@/stores/globalFilterSelector'
 import { createModeFilter, useMode1Store } from '@/stores/mode1'
-import type { ModeRequest, Profit, ProfitMode, QuantileData } from '@/types/mode1'
+import type {
+  ModeFilter,
+  ModeRequest,
+  Period,
+  Profit,
+  ProfitMode,
+  QuantileData,
+} from '@/types/mode1'
 
 defineOptions({ name: 'FactorDashboard' })
 
 interface FactorRow {
   id: string
+  sourceIndex: number
   index: number
   params: ModeRequest
   data?: QuantileData
@@ -32,6 +43,7 @@ const router = useRouter()
 const store = useMode1Store()
 const globalLoading = useGlobalLoadingStore()
 const globalMessage = useGlobalMessageStore()
+const filterSelector = useGlobalFilterSelectorStore()
 const { periods, items, periodLoading, listLoading, periodError, listError } = storeToRefs(store)
 const { visible: globalLoadingVisible } = storeToRefs(globalLoading)
 const searchKeyword = ref('')
@@ -41,19 +53,21 @@ const sortKey = ref<string | null>(null)
 const sortOrder = ref<'ascend' | 'descend' | false>(false)
 
 let settingInitialPeriod = false
+const listFilter = reactive<ModeFilter>({
+  start: '',
+  end: '',
+  filter_bz: false,
+  filter_st: false,
+  sector: [],
+  indice: [],
+})
+const sectorOptions = ref<string[]>()
+const indiceOptions = ref<string[]>()
 const filters = reactive({
-  strategy: '纯多头组合',
-  index: '沪深300',
   period: '',
   profitMode: 1 as ProfitMode,
 })
 
-const strategyOptions = [{ label: '纯多头组合', value: '纯多头组合' }]
-const indexOptions = [
-  { label: '沪深300', value: '沪深300' },
-  { label: '中证500', value: '中证500' },
-  { label: '中证1000', value: '中证1000' },
-]
 const periodOptions = computed(() =>
   periods.value.map((period) => ({ label: period.name, value: period.name })),
 )
@@ -66,37 +80,39 @@ const profitModeOptions = [
 const localPeriodLoading = computed(() => periodLoading.value && !globalLoadingVisible.value)
 const localListLoading = computed(() => listLoading.value && !globalLoadingVisible.value)
 
-const itemCount = computed(() => items.value.length)
+const filteredItems = computed(() => {
+  const keyword = searchKeyword.value.trim().toLowerCase()
+  const indexedItems = items.value.map((item, sourceIndex) => ({ item, sourceIndex }))
+
+  return keyword
+    ? indexedItems.filter(({ item }) => factorItemName(item).toLowerCase().includes(keyword))
+    : indexedItems
+})
+const itemCount = computed(() => filteredItems.value.length)
 const pageSizeOptions = computed(() => {
   const max = Math.ceil(itemCount.value / 10) * 10
   return Array.from({ length: max / 10 }, (_, index) => (index + 1) * 10)
 })
 
-const visibleItems = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return items.value.slice(start, start + pageSize.value)
-})
-
 const rows = computed<FactorRow[]>(() => {
   const offset = (page.value - 1) * pageSize.value
-  const keyword = searchKeyword.value.trim().toLowerCase()
-  const data = visibleItems.value.map((item, index) => ({
+  const data = filteredItems.value.map(({ item, sourceIndex }) => ({
     id: item.args.base.id,
-    index: offset + index + 1,
+    sourceIndex,
+    index: 0,
     params: item.args,
     data: item.data,
   }))
-  const filtered = keyword
-    ? data.filter((row) => factorName(row).toLowerCase().includes(keyword))
-    : data
 
-  if (!sortKey.value || !sortOrder.value) return filtered
+  if (sortKey.value && sortOrder.value) {
+    const direction = sortOrder.value === 'ascend' ? 1 : -1
+    data.sort((left, right) => compareRows(left, right, sortKey.value!) * direction)
+  }
 
-  return [...filtered].sort((left, right) => {
-    const leftValue = sortableValue(left, sortKey.value!)
-    const rightValue = sortableValue(right, sortKey.value!)
-    return sortOrder.value === 'ascend' ? leftValue - rightValue : rightValue - leftValue
-  })
+  return data.slice(offset, offset + pageSize.value).map((row, index) => ({
+    ...row,
+    index: offset + index + 1,
+  }))
 })
 
 watch(searchKeyword, () => {
@@ -131,8 +147,8 @@ async function initializeMode1() {
       settingInitialPeriod = true
       filters.period = period.name
       settingInitialPeriod = false
-      await store.loadList(createModeFilter(period))
-      if (listError.value) throw new Error(listError.value)
+      resetListFilter(period)
+      await reloadList()
     })
   } catch (error) {
     globalMessage.error(errorMessage(error, '获取模式一列表失败'))
@@ -144,10 +160,10 @@ async function loadPeriod(name: string) {
   if (!period) return
 
   page.value = 1
+  applyPeriodToFilter(period)
   try {
     await globalLoading.run(async () => {
-      await store.loadList(createModeFilter(period))
-      if (listError.value) throw new Error(listError.value)
+      await reloadList()
     })
   } catch (error) {
     globalMessage.error(errorMessage(error, '获取模式一列表失败'))
@@ -156,6 +172,77 @@ async function loadPeriod(name: string) {
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
+}
+
+async function reloadDashboard(): Promise<void> {
+  try {
+    await globalLoading.run(async () => {
+      await reloadList()
+    })
+  } catch (error) {
+    globalMessage.error(errorMessage(error, '获取模式一列表失败'))
+  }
+}
+
+async function reloadList(): Promise<void> {
+  if (!listFilter.start || !listFilter.end) throw new Error('没有可用的时间周期配置')
+
+  page.value = 1
+  await store.loadList(cloneModeFilter(listFilter))
+  if (listError.value) throw new Error(listError.value)
+}
+
+async function selectSectors(): Promise<void> {
+  try {
+    if (!sectorOptions.value) {
+      await globalLoading.run(async () => {
+        sectorOptions.value = await fetchSectors()
+      })
+    }
+    const result = await filterSelector.open({
+      title: '行业板块',
+      options: sectorOptions.value ?? [],
+      selected: listFilter.sector,
+    })
+    if (result) listFilter.sector = result
+  } catch (error) {
+    globalMessage.error(errorMessage(error, '行业板块加载失败'))
+  }
+}
+
+async function selectIndices(): Promise<void> {
+  try {
+    if (!indiceOptions.value) {
+      await globalLoading.run(async () => {
+        indiceOptions.value = await fetchIndices()
+      })
+    }
+    const result = await filterSelector.open({
+      title: '指数列表',
+      options: indiceOptions.value ?? [],
+      selected: listFilter.indice,
+    })
+    if (result) listFilter.indice = result
+  } catch (error) {
+    globalMessage.error(errorMessage(error, '指数列表加载失败'))
+  }
+}
+
+function resetListFilter(period: Period): void {
+  Object.assign(listFilter, createModeFilter(period))
+}
+
+function applyPeriodToFilter(period: Period): void {
+  listFilter.start = period.start
+  listFilter.end = period.end
+}
+
+function cloneModeFilter(filter: ModeFilter): ModeFilter {
+  return {
+    ...filter,
+    sector: [...filter.sector],
+    indice: [...filter.indice],
+  }
 }
 
 function switchKanban(step: number) {
@@ -188,6 +275,14 @@ function handlePageSizeChange(value: number) {
 function factorName(row: FactorRow): string {
   if (row.data?.name) return row.data.name
   return row.id
+}
+
+function factorInfo(row: FactorRow): string | undefined {
+  return row.data?.info || undefined
+}
+
+function factorItemName(item: { args: ModeRequest; data?: QuantileData }): string {
+  return item.data?.name || item.args.base.id
 }
 
 function first<T>(values: readonly T[]): T | undefined {
@@ -228,6 +323,14 @@ function maxAnnualized(row: FactorRow): number | undefined {
   return last(profitGroups(row))?.annualized_profit
 }
 
+function minTotalProfit(row: FactorRow): number | undefined {
+  return first(profitGroups(row))?.total_profit
+}
+
+function maxTotalProfit(row: FactorRow): number | undefined {
+  return last(profitGroups(row))?.total_profit
+}
+
 function minTurnover(row: FactorRow): number | undefined {
   return average(first(row.data?.turnover_rate ?? []))
 }
@@ -240,10 +343,24 @@ function sortableValue(row: FactorRow, key: string): number {
   const values: Record<string, number | undefined> = {
     min_year_rate: minAnnualized(row),
     max_year_rate: maxAnnualized(row),
+    min_total_profit: minTotalProfit(row),
+    max_total_profit: maxTotalProfit(row),
     min_turnover_rate: minTurnover(row),
     max_turnover_rate: maxTurnover(row),
   }
   return values[key] ?? 0
+}
+
+function compareRows(left: FactorRow, right: FactorRow, key: string): number {
+  if (key === 'factor_name') {
+    const result = factorName(left).localeCompare(factorName(right), 'zh-CN', {
+      numeric: true,
+      sensitivity: 'base',
+    })
+    return result || left.id.localeCompare(right.id)
+  }
+
+  return sortableValue(left, key) - sortableValue(right, key)
 }
 
 function formatPercent(value: number | undefined): string {
@@ -275,6 +392,7 @@ const columns: DataTableColumns<FactorRow> = [
     key: 'factor_name',
     title: '因子名称',
     align: 'center',
+    sorter: true,
     width: 300,
     ellipsis: { tooltip: true },
     render(row) {
@@ -282,8 +400,13 @@ const columns: DataTableColumns<FactorRow> = [
         'span',
         {
           style: { color: 'rgb(30, 70, 125)', cursor: 'pointer' },
+          title: factorInfo(row),
           onClick: () => {
-            void router.push({ name: 'mode1-preview', params: { id: row.id } })
+            void router.push({
+              name: 'mode1-preview',
+              params: { id: row.id },
+              query: { item: String(row.sourceIndex) },
+            })
           },
         },
         factorName(row),
@@ -307,8 +430,24 @@ const columns: DataTableColumns<FactorRow> = [
     render: (row) => renderRateCell(maxAnnualized(row)),
   },
   {
+    key: 'min_total_profit',
+    title: '最小分位数\n总收益',
+    align: 'center',
+    sorter: true,
+    width: 180,
+    render: (row) => renderRateCell(minTotalProfit(row)),
+  },
+  {
+    key: 'max_total_profit',
+    title: '最大分位数\n总收益',
+    align: 'center',
+    sorter: true,
+    width: 180,
+    render: (row) => renderRateCell(maxTotalProfit(row)),
+  },
+  {
     key: 'min_turnover_rate',
-    title: '最小分位数换手率',
+    title: '最小分位数\n换手率',
     align: 'center',
     sorter: true,
     width: 170,
@@ -316,7 +455,7 @@ const columns: DataTableColumns<FactorRow> = [
   },
   {
     key: 'max_turnover_rate',
-    title: '最大分位数换手率',
+    title: '最大分位数\n换手率',
     align: 'center',
     sorter: true,
     width: 170,
@@ -324,7 +463,7 @@ const columns: DataTableColumns<FactorRow> = [
   },
 ]
 
-const rowKey = (row: FactorRow) => row.id
+const rowKey = (row: FactorRow) => `${row.id}:${row.sourceIndex}`
 </script>
 
 <template>
@@ -377,15 +516,15 @@ const rowKey = (row: FactorRow) => row.id
               style="width: 180px"
             />
           </NFormItem>
-          <NFormItem label="策略类型">
-            <NSelect
-              v-model:value="filters.strategy"
-              :options="strategyOptions"
-              style="width: 140px"
-            />
+          <NFormItem label="行业板块">
+            <NButton size="small" class="selector-button" @click="selectSectors">
+              {{ listFilter.sector.length ? `已选 ${listFilter.sector.length} 项` : '全部行业' }}
+            </NButton>
           </NFormItem>
-          <NFormItem label="指数范围">
-            <NSelect v-model:value="filters.index" :options="indexOptions" style="width: 140px" />
+          <NFormItem label="指数列表">
+            <NButton size="small" class="selector-button" @click="selectIndices">
+              {{ listFilter.indice.length ? `已选 ${listFilter.indice.length} 项` : '全部指数' }}
+            </NButton>
           </NFormItem>
           <NFormItem label="时间周期">
             <NSelect
@@ -403,6 +542,20 @@ const rowKey = (row: FactorRow) => row.id
               :consistent-menu-width="false"
               style="width: 260px"
             />
+          </NFormItem>
+          <NFormItem label="" class="reload-form-item">
+            <NButton
+              type="primary"
+              color="#409eff"
+              size="small"
+              class="reload-btn"
+              :loading="localListLoading"
+              :disabled="periodLoading || listLoading"
+              @click="reloadDashboard"
+            >
+              <template #icon><img :src="RefreshIcon" alt="" class="reload-icon" /></template>
+              重载
+            </NButton>
           </NFormItem>
         </NForm>
       </div>
@@ -560,6 +713,25 @@ const rowKey = (row: FactorRow) => row.id
 
 .filter-bar :deep(.n-form-item-feedback-wrapper) {
   display: none;
+}
+
+.selector-button {
+  min-width: 112px;
+  color: #409eff;
+}
+
+.reload-form-item {
+  margin-left: auto;
+}
+
+.reload-btn {
+  min-width: 76px;
+}
+
+.reload-icon {
+  width: 14px;
+  height: 14px;
+  filter: brightness(0) invert(1);
 }
 
 .factor-table {

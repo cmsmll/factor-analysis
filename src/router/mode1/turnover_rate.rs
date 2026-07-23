@@ -7,17 +7,18 @@ use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::Receiver;
 
-use crate::{prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::Json};
+use crate::{prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::VJson};
 
 /// 换手率因子分析请求。
 ///
 /// 客户端通常先从 `POST /api/mode1/list` 取得默认结构，再按需修改参数。
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, validator::Validate)]
 pub struct Req {
+    #[validate(nested)]
     base: Base,
 }
 
-impl ArgsHandle for Req {
+impl Req {
     fn register(filter: &Filter) -> (Arc<RawValue>, Receiver<Arc<RawValue>>) {
         let mut req = Self::default();
         req.base.filter = filter.clone();
@@ -28,6 +29,7 @@ impl ArgsHandle for Req {
     }
 }
 
+impl ArgsHandle for Req {}
 impl Default for Req {
     fn default() -> Self {
         Self {
@@ -79,10 +81,11 @@ pub async fn router() -> Router {
     responses(
         (status_code = 200, description = "换手率因子分析结果", body = Res<QuantileData>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
+        (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
     )
 )]
-pub async fn turnover_rate(args: Json<Req>) -> Resp<Arc<RawValue>> {
+pub async fn turnover_rate(args: VJson<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
     match CACHE.get_or_run(key, move || turnover_rate_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),

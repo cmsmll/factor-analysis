@@ -12,7 +12,8 @@ pub use market::*;
 pub use metadata::*;
 use rayon::prelude::*;
 
-use rusqlite::{Connection, OpenFlags, Result, params, types::Type};
+use rusqlite::{Connection, OpenFlags, Result, params};
+use rustc_hash::FxHashMap;
 use time::{Date, format_description::well_known::Iso8601};
 
 use crate::config::Config;
@@ -72,9 +73,9 @@ impl DataFrameDb {
             };
             let finance = Arc::new(query_finance(finance_conn, range, &index_table)?);
             let profit = align_and_build_forward_profit(&metadata.code, &market, &finance);
-            let table = market.iter().enumerate().map(|(index, md)| (md.datetime.clone(), index)).collect();
-            let start = first.datetime.clone();
-            let end = last.datetime.clone();
+            let table = market.iter().enumerate().map(|(index, md)| (md.datetime, index)).collect::<FxHashMap<_, _>>();
+            let start = first.datetime;
+            let end = last.datetime;
 
             list.push(Arc::new(Contract {
                 start,
@@ -87,10 +88,10 @@ impl DataFrameDb {
             }));
         }
 
-        let start = index_table.first().ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-        let end = index_table.last().ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-        let start = parse_index_date(start)?;
-        let end = parse_index_date(end)?;
+        let start = *index_table.first().ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        let end = *index_table.last().ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+
+
         let (sector, indice) = dataframe::collect_metadata_lists(&list);
 
         Ok(DataFrame {
@@ -104,10 +105,6 @@ impl DataFrameDb {
     }
 }
 
-fn parse_index_date(value: &str) -> Result<Date> {
-    Date::parse(value, &Iso8601::DATE).map_err(|error| rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error)))
-}
-
 fn open_contract_databases(metadata: &[Metadata], directory: &Path) -> Result<Vec<Connection>> {
     metadata
         .par_iter()
@@ -118,7 +115,7 @@ fn open_contract_databases(metadata: &[Metadata], directory: &Path) -> Result<Ve
         .collect()
 }
 
-fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table: &mut BTreeSet<Arc<str>>) -> Result<Vec<MarketData>> {
+fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table: &mut BTreeSet<Date>) -> Result<Vec<MarketData>> {
     let sql = if range.is_some() {
         include_str!("sql/market_query_range.sql")
     } else {
@@ -126,12 +123,11 @@ fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table:
     };
     let mut stmt = database.prepare(sql)?;
     let map_row = |row: &rusqlite::Row<'_>| {
-        let mut datetime: Arc<str> = Arc::from(row.get::<_, String>(0)?);
-        if let Some(shared) = index_table.get(datetime.as_ref()) {
-            datetime = shared.clone();
-        } else {
-            index_table.insert(datetime.clone());
-        }
+        let datetime_str: String = row.get(0)?;
+        let datetime = Date::parse(&datetime_str, &Iso8601::DATE).map_err(|e|
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        )?;
+        index_table.insert(datetime);
         Ok(MarketData {
             datetime,
             change_percent: row.get(1)?,
@@ -152,7 +148,7 @@ fn query_market(database: &Connection, range: Option<(&str, &str)>, index_table:
     }
 }
 
-fn query_finance(database: &Connection, range: Option<(&str, &str)>, index_table: &BTreeSet<Arc<str>>) -> Result<Vec<Finance>> {
+fn query_finance(database: &Connection, range: Option<(&str, &str)>, _index_table: &BTreeSet<Date>) -> Result<Vec<Finance>> {
     let sql = if range.is_some() {
         include_str!("sql/finance_query_range.sql")
     } else {
@@ -160,8 +156,10 @@ fn query_finance(database: &Connection, range: Option<(&str, &str)>, index_table
     };
     let mut stmt = database.prepare(sql)?;
     let map_row = |row: &rusqlite::Row<'_>| {
-        let datetime = row.get::<_, String>(0)?;
-        let datetime = index_table.get(datetime.as_str()).cloned().unwrap_or_else(|| Arc::from(datetime));
+        let datetime_str: String = row.get(0)?;
+        let datetime = Date::parse(&datetime_str, &Iso8601::DATE).map_err(|e|
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        )?;
 
         Ok(Finance {
             datetime,
@@ -246,7 +244,7 @@ mod tests {
 
     fn market(datetime: &str, close: f64) -> MarketData {
         MarketData {
-            datetime: Arc::from(datetime),
+            datetime: Date::parse(datetime, &Iso8601::DATE).unwrap(),
             change_percent: 0.01,
             open: close - 1.0,
             close,
@@ -261,7 +259,7 @@ mod tests {
 
     fn finance(datetime: &str, total_shares: f64) -> Finance {
         Finance {
-            datetime: Arc::from(datetime),
+            datetime: Date::parse(datetime, &Iso8601::DATE).unwrap(),
             total_shares,
             float_shares: total_shares / 2.0,
             total_market: total_shares * 10.0,
@@ -314,10 +312,10 @@ mod tests {
         let range_frame = db.query(date(2), date(3)).unwrap();
 
         assert_eq!(market_all.len(), 3);
-        assert_eq!(market_all[0].datetime.as_ref(), "2025-01-01");
-        assert_eq!(market_all[2].datetime.as_ref(), "2025-01-03");
+        assert_eq!(market_all[0].datetime.to_string(), "2025-01-01");
+        assert_eq!(market_all[2].datetime.to_string(), "2025-01-03");
         assert_eq!(finance_all.len(), 3);
-        assert_eq!(finance_all[0].datetime.as_ref(), "2025-01-01");
+        assert_eq!(finance_all[0].datetime.to_string(), "2025-01-01");
         assert_eq!(all_frame.start, date(1));
         assert_eq!(all_frame.end, date(3));
 
@@ -333,10 +331,10 @@ mod tests {
         let indices = all_frame.index_iter().collect::<Vec<_>>();
         assert_eq!(indices.iter().map(|item| item.index).collect::<Vec<_>>(), [0, 1, 2]);
         assert_eq!(
-            indices.iter().map(|item| item.datetime.as_ref()).collect::<Vec<_>>(),
+            indices.iter().map(|item| item.datetime.to_string()).collect::<Vec<_>>(),
             ["2025-01-01", "2025-01-02", "2025-01-03"]
         );
-        assert!(Arc::ptr_eq(&indices[0].datetime, &all_frame.index[0]));
+        assert_eq!(indices[0].datetime, all_frame.index[0]);
 
         assert_eq!(all_frame.list[0].market.len(), 3);
         assert_eq!(all_frame.list[0].profit.len(), 1);
@@ -346,24 +344,24 @@ mod tests {
         assert!((profit3 - 0.1).abs() < 1e-12);
         assert!((profit4 - 0.2).abs() < 1e-12);
         assert!((turnover_rate - 0.02).abs() < 1e-12);
-        assert_eq!(all_frame.list[0].finance[0].datetime.as_ref(), "2025-01-01");
-        assert_eq!(all_frame.list[0].finance[1].datetime.as_ref(), "2025-01-02");
+        assert_eq!(all_frame.list[0].finance[0].datetime.to_string(), "2025-01-01");
+        assert_eq!(all_frame.list[0].finance[1].datetime.to_string(), "2025-01-02");
         assert_eq!(frame.list.len(), 1);
         assert_eq!(frame.list[0].metadata.code.as_ref(), "000001");
         assert_eq!(frame.list[0].market.len(), 3);
         assert_eq!(frame.list[0].finance.len(), 3);
-        assert_eq!(frame.list[0].finance[0].datetime.as_ref(), "2025-01-01");
-        assert_eq!(frame.list[0].finance[1].datetime.as_ref(), "2025-01-02");
+        assert_eq!(frame.list[0].finance[0].datetime.to_string(), "2025-01-01");
+        assert_eq!(frame.list[0].finance[1].datetime.to_string(), "2025-01-02");
         assert_eq!(range_frame.list[0].market.len(), 2);
         assert!(range_frame.list[0].profit.is_empty());
         assert_eq!(range_frame.list[0].finance.len(), 2);
-        assert_eq!(range_frame.list[0].finance[0].datetime.as_ref(), "2025-01-02");
-        assert_eq!(range_frame.list[0].finance[1].datetime.as_ref(), "2025-01-03");
+        assert_eq!(range_frame.list[0].finance[0].datetime.to_string(), "2025-01-02");
+        assert_eq!(range_frame.list[0].finance[1].datetime.to_string(), "2025-01-03");
         for (market, finance) in range_frame.list[0].market.iter().zip(range_frame.list[0].finance.iter()) {
-            assert!(Arc::ptr_eq(&market.datetime, &finance.datetime));
+            assert_eq!(market.datetime, finance.datetime); // Date is Copy — value equality
         }
         for (market, finance) in frame.list[0].market.iter().zip(frame.list[0].finance.iter()) {
-            assert!(Arc::ptr_eq(&market.datetime, &finance.datetime));
+            assert_eq!(market.datetime, finance.datetime); // Date is Copy — value equality
         }
 
         // 测试超出 DataFrame 的请求范围会裁剪到实际边界，并返回共享数据的新 DataFrame。
@@ -372,10 +370,10 @@ mod tests {
         assert_eq!(ranged.start, date(1));
         assert_eq!(ranged.end, date(3));
         assert_eq!(
-            ranged.index.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+            ranged.index.iter().map(|d| d.to_string()).collect::<Vec<_>>(),
             ["2025-01-01", "2025-01-02", "2025-01-03"]
         );
-        assert!(Arc::ptr_eq(&ranged.index[0], &all_frame.index[0]));
+        assert_eq!(ranged.index[0], all_frame.index[0]); // Date is Copy
         assert!(Arc::ptr_eq(&ranged.list[0], &all_frame.list[0]));
         assert!(Arc::ptr_eq(&ranged.sector, &all_frame.sector));
         assert!(Arc::ptr_eq(&ranged.indice, &all_frame.indice));
@@ -384,14 +382,14 @@ mod tests {
         let partial = all_frame.range(date(2), date(4));
         assert_eq!(partial.start, date(2));
         assert_eq!(partial.end, date(3));
-        assert_eq!(partial.index.iter().map(AsRef::as_ref).collect::<Vec<_>>(), ["2025-01-02", "2025-01-03"]);
-        assert!(Arc::ptr_eq(&partial.index[0], &all_frame.index[1]));
+        assert_eq!(partial.index.iter().map(|d| d.to_string()).collect::<Vec<_>>(), ["2025-01-02", "2025-01-03"]);
+        // Date is Copy — pointer comparison not applicable
 
         // 测试 range_filter 在日期裁剪基础上过滤合约，并继续复用原始 Arc。
         let filtered = all_frame.range_filter(date(2), date(4), |contract: &Arc<Contract>| contract.metadata.code.as_ref() == "000001");
         assert_eq!(filtered.start, date(2));
         assert_eq!(filtered.end, date(3));
-        assert_eq!(filtered.index.iter().map(AsRef::as_ref).collect::<Vec<_>>(), ["2025-01-02", "2025-01-03"]);
+        assert_eq!(filtered.index.iter().map(|d| d.to_string()).collect::<Vec<_>>(), ["2025-01-02", "2025-01-03"]);
         assert_eq!(filtered.list.len(), 1);
         assert!(Arc::ptr_eq(&filtered.list[0], &all_frame.list[0]));
 

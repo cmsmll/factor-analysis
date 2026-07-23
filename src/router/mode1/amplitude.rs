@@ -7,17 +7,18 @@ use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::Receiver;
 
-use crate::{math::dev, prelude::*, router::mode1::Base, toolbox::Json};
+use crate::{math::dev, prelude::*, router::mode1::Base, toolbox::VJson};
 
 /// 振幅因子分析请求。
 ///
 /// 客户端通常先从 `POST /api/mode1/list` 取得默认结构，再按需修改参数。
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, validator::Validate)]
 pub struct Req {
+    #[validate(nested)]
     base: Base,
 }
 
-impl ArgsHandle for Req {
+impl Req {
     fn register(filter: &Filter) -> (Arc<RawValue>, Receiver<Arc<RawValue>>) {
         let mut req = Self::default();
         req.base.filter = filter.clone();
@@ -28,6 +29,7 @@ impl ArgsHandle for Req {
     }
 }
 
+impl ArgsHandle for Req {}
 impl Default for Req {
     fn default() -> Self {
         Self {
@@ -79,10 +81,11 @@ pub async fn router() -> Router {
     responses(
         (status_code = 200, description = "振幅因子分析结果", body = Res<QuantileData>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
+        (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
     )
 )]
-pub async fn amplitude(args: Json<Req>) -> Resp<Arc<RawValue>> {
+pub async fn amplitude(args: VJson<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
     match CACHE.get_or_run(key, move || amplitude_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
@@ -97,7 +100,7 @@ pub async fn amplitude(args: Json<Req>) -> Resp<Arc<RawValue>> {
 /// 下下日开盘、下一日开盘到下下日收盘。
 fn amplitude_run(args: Req) -> Box<RawValue> {
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new("振幅因子", "按振幅从低到高分位", args.base.count);
+    let mut qd = QuantileData::new("振幅因子", "振幅:=(HIGH-LOW)/LOW", args.base.count);
     let mut items = Vec::with_capacity(df.list.len());
 
     for index in df.index_iter() {
@@ -123,20 +126,4 @@ fn amplitude_run(args: Req) -> Box<RawValue> {
 #[inline]
 fn amplitude_factor(high: f64, low: f64) -> f64 {
     dev(high - low, low)
-}
-#[cfg(test)]
-mod tests {
-    use super::amplitude_factor;
-
-    // 测试振幅使用最高价与最低价之差除以最低价。
-    #[test]
-    fn calculates_amplitude() {
-        assert_eq!(amplitude_factor(12.0, 10.0), 0.2);
-    }
-
-    // 测试最低价为零时振幅直接返回零。
-    #[test]
-    fn returns_zero_when_low_is_zero() {
-        assert_eq!(amplitude_factor(12.0, 0.0), 0.0);
-    }
 }

@@ -132,7 +132,22 @@ mod tests {
                         .push(Router::with_path("list").post(mode1::list))
                         .push(Router::with_path("turnover-rate").post(mode1::turnover_rate::turnover_rate))
                         .push(Router::with_path("amplitude").post(mode1::amplitude::amplitude))
-                        .push(Router::with_path("market-value").post(mode1::market_value::market_value)),
+                        .push(Router::with_path("market-value").post(mode1::market_value::market_value))
+                        .push(Router::with_path("volume").post(mode1::volume::volume))
+                        .push(Router::with_path("turnover").post(mode1::turnover::turnover))
+                        .push(Router::with_path("volume-n").post(mode1::volume_n::volume_n))
+                        .push(Router::with_path("turnover-n").post(mode1::turnover_n::turnover_n))
+                        .push(Router::with_path("turnover-rate-n").post(mode1::turnover_rate_n::turnover_rate_n))
+                        .push(Router::with_path("bias-n").post(mode1::bias_n::bias_n))
+                        .push(Router::with_path("cci-n").post(mode1::cci_n::cci_n))
+                        .push(Router::with_path("sma-close-n").post(mode1::sma_close_n::sma_close_n))
+                        .push(Router::with_path("ema-close-n").post(mode1::ema_close_n::ema_close_n))
+                        .push(Router::with_path("pvt").post(mode1::pvt::pvt))
+                        .push(Router::with_path("pvt-n").post(mode1::pvt_n::pvt_n))
+                        .push(Router::with_path("macd").post(mode1::macd::macd))
+                        .push(Router::with_path("bbi").post(mode1::bbi::bbi))
+                        .push(Router::with_path("mass").post(mode1::mass::mass))
+                        .push(Router::with_path("trix-n").post(mode1::trix_n::trix_n)),
                 ),
         );
         let document = crate::app::build_openapi(&router);
@@ -147,6 +162,21 @@ mod tests {
             "analyze_turnover_rate",
             "analyze_amplitude",
             "analyze_market_value",
+            "analyze_volume",
+            "analyze_turnover",
+            "analyze_volume_n",
+            "analyze_turnover_n",
+            "analyze_turnover_rate_n",
+            "analyze_bias_n",
+            "analyze_cci_n",
+            "analyze_sma_close_n",
+            "analyze_ema_close_n",
+            "analyze_pvt",
+            "analyze_pvt_n",
+            "analyze_macd",
+            "analyze_bbi",
+            "analyze_mass",
+            "analyze_trix_n",
         ] {
             assert!(json.contains(operation), "OpenAPI 缺少操作: {operation}");
         }

@@ -1,26 +1,28 @@
 use rayon::prelude::*;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, Transaction, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, Transaction, params, types::Type};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::BTreeSet,
     fmt::Display,
     fs, io,
     path::Path,
     sync::Arc,
 };
-use time::Date;
+use time::{Date, format_description::well_known::Iso8601};
 
 use crate::db::parse::ParseTbf;
 
 /// 行情数据
 pub type MarketDataList = Arc<Vec<MarketData>>;
-pub type MarketIndexTable = HashMap<Arc<str>, usize>;
+pub type MarketIndexTable = FxHashMap<Date, usize>;
 pub type MarketQueryResult = (MarketDataList, MarketIndexTable);
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketData {
     /// 日期时间（例如：2025-03-15 14:30:00）
-    pub datetime: Arc<str>,
+    #[serde(with = "crate::toolbox::serde::date_format")]
+    pub datetime: Date,
     /// 涨幅（百分比）
     pub change_percent: f64,
     /// 开盘价
@@ -78,13 +80,13 @@ impl MarketData {
             return;
         }
 
-        let mut prev = data[0].datetime.clone();
+        let mut prev = data[0].datetime;
         MarketData::table_header();
         for item in data {
-            if item.datetime[0..10] != prev[0..10] {
+            if item.datetime != prev {
                 MarketData::table_middle();
             }
-            prev = item.datetime.clone();
+            prev = item.datetime;
             println!("{item}")
         }
         MarketData::table_footer();
@@ -163,7 +165,7 @@ impl MarketDataDb {
         self.database.execute(
             include_str!("sql/market_insert.sql"),
             params![
-                md.datetime.as_ref(),
+                md.datetime.to_string(),
                 md.change_percent,
                 md.open,
                 md.close,
@@ -186,18 +188,22 @@ impl MarketDataDb {
         let mut stmt = self.database.prepare(include_str!("sql/market_query_range.sql"))?;
 
         let rows = stmt.query_map(params![start, end], |row| {
-            Ok(MarketData {
-                datetime: Arc::from(row.get::<_, String>(0)?),
-                change_percent: row.get(1)?,
-                open: row.get(2)?,
-                close: row.get(3)?,
-                high: row.get(4)?,
-                low: row.get(5)?,
-                volume: row.get(6)?,
-                turnover: row.get(7)?,
-                turnover_rate: row.get(8)?,
-                is_st: row.get(9)?,
-            })
+            let dt: String = row.get(0)?;
+                let datetime = Date::parse(&dt, &Iso8601::DATE).map_err(|e|
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(e))
+                )?;
+                Ok(MarketData {
+                    datetime,
+                    change_percent: row.get(1)?,
+                    open: row.get(2)?,
+                    close: row.get(3)?,
+                    high: row.get(4)?,
+                    low: row.get(5)?,
+                    volume: row.get(6)?,
+                    turnover: row.get(7)?,
+                    turnover_rate: row.get(8)?,
+                    is_st: row.get(9)?,
+                })
         })?;
 
         rows.collect()
@@ -207,18 +213,22 @@ impl MarketDataDb {
     pub fn query_all(&self) -> Result<Vec<MarketData>> {
         let mut stmt = self.database.prepare(include_str!("sql/market_query_all.sql"))?;
         let rows = stmt.query_map([], |row| {
-            Ok(MarketData {
-                datetime: Arc::from(row.get::<_, String>(0)?),
-                change_percent: row.get(1)?,
-                open: row.get(2)?,
-                close: row.get(3)?,
-                high: row.get(4)?,
-                low: row.get(5)?,
-                volume: row.get(6)?,
-                turnover: row.get(7)?,
-                turnover_rate: row.get(8)?,
-                is_st: row.get(9)?,
-            })
+            let dt: String = row.get(0)?;
+                let datetime = Date::parse(&dt, &Iso8601::DATE).map_err(|e|
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(e))
+                )?;
+                Ok(MarketData {
+                    datetime,
+                    change_percent: row.get(1)?,
+                    open: row.get(2)?,
+                    close: row.get(3)?,
+                    high: row.get(4)?,
+                    low: row.get(5)?,
+                    volume: row.get(6)?,
+                    turnover: row.get(7)?,
+                    turnover_rate: row.get(8)?,
+                    is_st: row.get(9)?,
+                })
         })?;
 
         rows.collect()
@@ -227,8 +237,12 @@ impl MarketDataDb {
     pub fn query_latest(&self) -> Result<Option<MarketData>> {
         self.database
             .query_row(include_str!("sql/market_query_latest.sql"), [], |row| {
+                let dt: String = row.get(0)?;
+                let datetime = Date::parse(&dt, &Iso8601::DATE).map_err(|e|
+                    rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(e))
+                )?;
                 Ok(MarketData {
-                    datetime: Arc::from(row.get::<_, String>(0)?),
+                    datetime,
                     change_percent: row.get(1)?,
                     open: row.get(2)?,
                     close: row.get(3)?,
@@ -243,22 +257,21 @@ impl MarketDataDb {
             .optional()
     }
 
-    pub fn query_with_set(&self, start: Date, end: Date, set: &mut BTreeSet<Arc<str>>) -> Result<MarketQueryResult> {
+    pub fn query_with_set(&self, start: Date, end: Date, set: &mut BTreeSet<Date>) -> Result<MarketQueryResult> {
         let start = start.to_string();
         let end = end.saturating_add(time::Duration::days(1)).to_string();
 
         let mut stmt = self.database.prepare(include_str!("sql/market_query_range.sql"))?;
 
         // 时间索引表
-        let mut table = HashMap::default();
+        let mut table = FxHashMap::default();
         let rows = stmt.query_map(params![start, end], |row| {
-            let mut datetime: Arc<str> = Arc::from(row.get::<_, String>(0)?);
-            if let Some(arc_dt) = set.get(datetime.as_ref()) {
-                datetime = arc_dt.clone();
-            } else {
-                set.insert(datetime.clone());
-            };
-            table.insert(datetime.clone(), table.len());
+            let dt: String = row.get(0)?;
+            let datetime = Date::parse(&dt, &Iso8601::DATE).map_err(|e|
+                rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(e))
+            )?;
+            set.insert(datetime);
+            table.insert(datetime, table.len());
 
             Ok(MarketData {
                 datetime,
@@ -277,7 +290,7 @@ impl MarketDataDb {
         Ok((Arc::new(rows.collect::<Result<Vec<MarketData>, rusqlite::Error>>()?), table))
     }
 
-    pub fn query_with_table(&self, start: Date, end: Date, table: &mut BTreeSet<Arc<str>>) -> Result<MarketQueryResult> {
+    pub fn query_with_table(&self, start: Date, end: Date, table: &mut BTreeSet<Date>) -> Result<MarketQueryResult> {
         self.query_with_set(start, end, table)
     }
 
@@ -300,7 +313,7 @@ fn add_market_batch(transaction: &Transaction<'_>, data: &[MarketData]) -> Resul
     let mut statement = transaction.prepare_cached(include_str!("sql/market_insert.sql"))?;
     for md in data {
         statement.execute(params![
-            md.datetime.as_ref(),
+            md.datetime.to_string(),
             md.change_percent,
             md.open,
             md.close,
@@ -356,7 +369,6 @@ pub fn tbf_to_market(input: &str, output: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use tempfile::tempdir;
     use time::{Date, Month};
@@ -369,7 +381,7 @@ mod tests {
 
     fn market(datetime: &str, close: f64) -> MarketData {
         MarketData {
-            datetime: Arc::from(datetime),
+            datetime: Date::parse(datetime, &Iso8601::DATE).unwrap(),
             change_percent: 0.01,
             open: close - 1.0,
             close,
@@ -407,7 +419,7 @@ mod tests {
         let data = db.query(date(1), date(2)).unwrap();
 
         assert_eq!(data.len(), 2);
-        assert_eq!(data[0].datetime.as_ref(), "2025-01-01");
-        assert_eq!(data[1].datetime.as_ref(), "2025-01-02");
+        assert_eq!(data[0].datetime.to_string(), "2025-01-01");
+        assert_eq!(data[1].datetime.to_string(), "2025-01-02");
     }
 }

@@ -25,7 +25,7 @@ pub struct RunCommand {}
 impl RunCommand {
     pub(super) async fn execute(self) {
         let now = Instant::now();
-        println!("开始加载数据库...");
+        println!("正在加载数据库...");
         let router = router::router().await;
         let openapi = build_openapi(&router);
 

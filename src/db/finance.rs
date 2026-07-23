@@ -1,16 +1,17 @@
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Result, Transaction, params};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, fs, io, path::Path, sync::Arc};
-use time::Date;
+use std::{collections::BTreeSet, fs, io, path::Path};
+use time::{Date, format_description::well_known::Iso8601};
 
 use crate::db::parse::ParseTbf;
 
 /// 财务数据
 /// 财务数据
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finance {
-    pub datetime: Arc<str>,
+    #[serde(with = "crate::toolbox::serde::date_format")]
+    pub datetime: Date,
     /// 总股本（单位：股）
     pub total_shares: f64,
     /// 流通股本（单位：股）
@@ -19,6 +20,18 @@ pub struct Finance {
     pub total_market: f64,
     /// 流通市值（单位：元）
     pub float_market: f64,
+}
+
+impl Default for Finance {
+    fn default() -> Self {
+        Self {
+            datetime: Date::from_calendar_date(2000, time::Month::January, 1).unwrap(),
+            total_shares: 0.0,
+            float_shares: 0.0,
+            total_market: 0.0,
+            float_market: 0.0,
+        }
+    }
 }
 
 impl Finance {
@@ -81,8 +94,12 @@ impl FinanceDB {
         let mut stmt = self.database.prepare(include_str!("sql/finance_query_range.sql"))?;
 
         let rows = stmt.query_map(params![start, end], |row| {
+            let datetime_str: String = row.get(0)?;
+            let datetime = Date::parse(&datetime_str, &Iso8601::DATE).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+            })?;
             Ok(Finance {
-                datetime: Arc::from(row.get::<_, String>(0)?),
+                datetime,
                 total_shares: row.get(1)?,
                 float_shares: row.get(2)?,
                 total_market: row.get(3)?,
@@ -97,8 +114,12 @@ impl FinanceDB {
     pub fn query_all(&self) -> Result<Vec<Finance>> {
         let mut stmt = self.database.prepare(include_str!("sql/finance_query_all.sql"))?;
         let rows = stmt.query_map([], |row| {
+            let datetime_str: String = row.get(0)?;
+            let datetime = Date::parse(&datetime_str, &Iso8601::DATE).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+            })?;
             Ok(Finance {
-                datetime: Arc::from(row.get::<_, String>(0)?),
+                datetime,
                 total_shares: row.get(1)?,
                 float_shares: row.get(2)?,
                 total_market: row.get(3)?,
@@ -112,8 +133,12 @@ impl FinanceDB {
     pub fn query_latest(&self) -> Result<Option<Finance>> {
         self.database
             .query_row(include_str!("sql/finance_query_latest.sql"), [], |row| {
+                let dt: String = row.get(0)?;
+                let datetime = Date::parse(&dt, &Iso8601::DATE).map_err(|e|
+                    rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+                )?;
                 Ok(Finance {
-                    datetime: Arc::from(row.get::<_, String>(0)?),
+                    datetime,
                     total_shares: row.get(1)?,
                     float_shares: row.get(2)?,
                     total_market: row.get(3)?,
@@ -127,7 +152,7 @@ impl FinanceDB {
         self.database.execute(
             include_str!("sql/finance_insert.sql"),
             params![
-                financial.datetime.as_ref(),
+                financial.datetime.to_string(),
                 financial.total_shares,
                 financial.float_shares,
                 financial.total_market,
@@ -157,7 +182,7 @@ fn add_finance_batch(transaction: &Transaction<'_>, data: &[Finance]) -> Result<
     let mut statement = transaction.prepare_cached(include_str!("sql/finance_insert.sql"))?;
     for financial in data {
         statement.execute(params![
-            financial.datetime.as_ref(),
+            financial.datetime.to_string(),
             financial.total_shares,
             financial.float_shares,
             financial.total_market,

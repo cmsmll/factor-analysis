@@ -7,3 +7,4 @@ pub use crate::{reject, rejectf, res, resf, resolve, resolvef};
 pub use salvo::prelude::*;
 pub use serde_json::value::RawValue;
 pub use time::macros::{date, datetime, time};
+pub use validator::Validate;

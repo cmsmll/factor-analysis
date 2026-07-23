@@ -1,9 +1,10 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     sync::Arc,
 };
 
 use derive_more::Deref;
+use rustc_hash::FxHashMap;
 use time::Date;
 
 use crate::{
@@ -16,7 +17,7 @@ pub struct DataFrame {
     pub end: Date,
     pub start: Date,
     /// 索引表
-    pub index: Vec<Arc<str>>,
+    pub index: Vec<Date>,
     /// 数据列表
     pub list: Vec<Arc<Contract>>,
     /// 板块列表
@@ -28,20 +29,18 @@ pub struct DataFrame {
 impl DataFrame {
     /// 按索引表顺序迭代时间索引。
     pub fn index_iter(&self) -> impl Iterator<Item = Index> + '_ {
-        self.index.iter().enumerate().map(|(index, datetime)| Index::new(index, datetime.clone()))
+        self.index.iter().enumerate().map(|(index, datetime)| Index::new(index, *datetime))
     }
 
     /// 返回指定日期范围内的新数据帧，超出的边界会被裁剪。
     pub fn range(&self, start: Date, end: Date) -> Self {
         let start = start.max(self.start);
         let end = end.min(self.end);
-        let start_text = start.to_string();
-        let end_text = end.to_string();
         let index = self
             .index
             .iter()
-            .filter(|datetime| datetime.as_ref() >= start_text.as_str() && datetime.as_ref() <= end_text.as_str())
-            .cloned()
+            .filter(|datetime| **datetime >= start && **datetime <= end)
+            .copied()
             .collect();
 
         Self {
@@ -109,14 +108,14 @@ pub(super) fn collect_metadata_lists(list: &[Arc<Contract>]) -> (Arc<HashSet<Str
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Index {
     pub index: usize,
-    pub datetime: Arc<str>,
+    pub datetime: Date,
 }
 
 impl Index {
-    pub fn new(index: usize, datetime: impl Into<Arc<str>>) -> Self {
+    pub fn new(index: usize, datetime: Date) -> Self {
         Self {
             index,
-            datetime: datetime.into(),
+            datetime,
         }
     }
 }
@@ -124,12 +123,12 @@ impl Index {
 /// 合约数据
 #[derive(Debug)]
 pub struct Contract {
-    pub start: Arc<str>,
-    pub end: Arc<str>,
+    pub start: Date,
+    pub end: Date,
     /// 合约元数据
     pub metadata: Metadata,
     /// 时间表
-    pub table: HashMap<Arc<str>, usize>,
+    pub table: FxHashMap<Date, usize>,
     /// 行情数据
     pub market: Arc<Vec<MarketData>>,
     /// 财务数据
@@ -186,6 +185,7 @@ impl Contract {
 }
 #[cfg(test)]
 mod tests {
+    use time::format_description::well_known::Iso8601;
     use time::{Date, Month};
 
     use super::*;
@@ -196,8 +196,8 @@ mod tests {
 
     fn contract(code: &str, exchange: &str, sector: &str, indice: &str) -> Arc<Contract> {
         Arc::new(Contract {
-            start: Arc::from("2025-01-01"),
-            end: Arc::from("2025-01-03"),
+            start: date(1),
+            end: date(3),
             metadata: Metadata {
                 exchange: exchange.to_string(),
                 name: Arc::from(code),
@@ -210,7 +210,7 @@ mod tests {
                 indice: HashSet::from([indice.to_string()]),
                 listing_date: "2020-01-01".to_string(),
             },
-            table: HashMap::new(),
+            table: FxHashMap::default(),
             market: Arc::new(Vec::new()),
             finance: Arc::new(Vec::new()),
             profit: Vec::new(),
@@ -227,7 +227,7 @@ mod tests {
         DataFrame {
             start: date(1),
             end: date(3),
-            index: vec![Arc::from("2025-01-01"), Arc::from("2025-01-02"), Arc::from("2025-01-03")],
+            index: vec![date(1), date(2), date(3)],
             list,
             sector,
             indice,
@@ -253,18 +253,27 @@ mod tests {
         contract.market = Arc::new(
             (1..=3)
                 .map(|day| MarketData {
-                    datetime: Arc::from(format!("2025-01-{day:02}")),
+                    datetime: Date::parse(&format!("2025-01-{day:02}"), &Iso8601::DATE).unwrap(),
                     close: f64::from(day),
-                    ..Default::default()
+                    change_percent: 0.0,
+                    open: 0.0,
+                    high: 0.0,
+                    low: 0.0,
+                    volume: 0.0,
+                    turnover: 0.0,
+                    turnover_rate: 0.0,
+                    is_st: false,
                 })
                 .collect(),
         );
         contract.finance = Arc::new(
             (1..=3)
                 .map(|day| Finance {
-                    datetime: Arc::from(format!("2025-01-{day:02}")),
+                    datetime: Date::parse(&format!("2025-01-{day:02}"), &Iso8601::DATE).unwrap(),
                     total_market: f64::from(day) * 100.0,
-                    ..Default::default()
+                    total_shares: 0.0,
+                    float_shares: 0.0,
+                    float_market: 0.0,
                 })
                 .collect(),
         );
@@ -273,10 +282,10 @@ mod tests {
             .market
             .iter()
             .enumerate()
-            .map(|(index, market)| (market.datetime.clone(), index))
-            .collect();
+            .map(|(index, market)| (market.datetime, index))
+            .collect::<FxHashMap<_, _>>();
 
-        let current = contract.data_ref(&Index::new(1, Arc::from("2025-01-02"))).unwrap();
+        let current = contract.data_ref(&Index::new(1, date(2))).unwrap();
 
         assert_eq!(current.index(), 1);
         assert_eq!(current.close, 2.0);
@@ -285,7 +294,7 @@ mod tests {
         assert!(current.before(2).is_none());
         assert!(current.after(2).is_none());
 
-        let first = Index::new(0, Arc::from("2025-01-01"));
+        let first = Index::new(0, date(1));
         let (market, profit) = contract.data(&first).unwrap();
         assert_eq!(market.close, 1.0);
         assert_eq!(profit, &[0.1, 0.2, 0.3, 0.4, 0.5]);
@@ -294,7 +303,7 @@ mod tests {
         assert_eq!(market.close, 1.0);
         assert_eq!(profit, &[0.1, 0.2, 0.3, 0.4, 0.5]);
         assert_eq!(finance.total_market, 100.0);
-        assert!(contract.data(&Index::new(1, Arc::from("2025-01-02"))).is_none());
+        assert!(contract.data(&Index::new(1, date(2))).is_none());
     }
 
     // 测试板块和指数条件使用并集，任意一项匹配即可保留合约。

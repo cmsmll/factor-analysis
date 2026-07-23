@@ -290,7 +290,7 @@ finance.total_market
 | `source` | number[] | 每个日期的组内平均单期收益。 |
 | `total_profit` | number | 各期收益直接求和。 |
 | `total_net_value` | number | 从 1 开始按 `1 + period_profit` 连乘。 |
-| `annualized_profit` | number | `total_profit / period_count * 365`。 |
+| `annualized_profit` | number | 序列化前按 `datetime` 首尾日期跨度计算：`total_profit / days * 365`。 |
 
 ## 缓存
 

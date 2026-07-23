@@ -1,7 +1,9 @@
 mod avg;
+mod moving;
 mod sum;
 
 pub use avg::*;
+pub use moving::*;
 pub use sum::*;
 
 /// 执行除法，分母为零时返回零。

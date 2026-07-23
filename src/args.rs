@@ -5,7 +5,6 @@ use salvo_oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use time::Date;
-use tokio::sync::broadcast::Receiver;
 
 use crate::{config::Config, toolbox::date_format};
 
@@ -25,11 +24,9 @@ pub trait ArgsHandle: Serialize + 'static {
         let s = serde_json::to_string(self).unwrap();
         RawValue::from_string(s).unwrap()
     }
-
-    fn register(filter: &Filter) -> (Arc<RawValue>, Receiver<Arc<RawValue>>);
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToSchema, validator::Validate)]
 pub struct Filter {
     /// 开始时间
     #[serde(with = "date_format")]
@@ -103,7 +100,7 @@ impl IntArg {
 }
 
 /// 整数参数
-#[derive(Debug, Serialize, Deserialize, Deref, DerefMut)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Deref, DerefMut)]
 pub struct UntArg {
     pub name: String,
     #[deref]

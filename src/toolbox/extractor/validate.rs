@@ -1,5 +1,3 @@
-use std::fmt::Write;
-
 use validator::Validate;
 
 use crate::resp::Res;
@@ -10,12 +8,5 @@ pub fn validate(data: &(impl Validate + ?Sized)) -> Result<(), Res> {
         return Ok(());
     };
 
-    let mut message = String::from("数据验证失败: ");
-    for (name, fields) in errors.field_errors() {
-        let codes = fields.iter().map(|field| field.code.as_ref()).collect::<Vec<_>>().join(", ");
-        let _ = write!(message, "{name}<{codes}>; ");
-    }
-    message.truncate(message.trim_end_matches("; ").len());
-
-    Err(Res::msg(422, message))
+    Err(Res::msg(422, format!("数据验证失败: {errors}")))
 }

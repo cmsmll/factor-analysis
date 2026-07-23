@@ -36,7 +36,7 @@ export const useMode1Store = defineStore('mode1', () => {
 
     try {
       const data = await fetchMode1List(filter)
-      if (listRequestVersion === version) items.value = data
+      if (listRequestVersion === version) items.value = sortModeListItems(data)
     } catch (error) {
       if (listRequestVersion === version) {
         listError.value = error instanceof Error ? error.message : '获取模式一列表失败'
@@ -77,4 +77,18 @@ export function createModeFilter(period: Period): ModeFilter {
     sector: [],
     indice: [],
   }
+}
+
+function sortModeListItems(data: ModeListItem[]): ModeListItem[] {
+  return [...data].sort((left, right) => {
+    const result = factorName(left).localeCompare(factorName(right), 'zh-CN', {
+      numeric: true,
+      sensitivity: 'base',
+    })
+    return result || left.args.base.id.localeCompare(right.args.base.id)
+  })
+}
+
+function factorName(item: ModeListItem): string {
+  return item.data?.name || item.args.base.id
 }

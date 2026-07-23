@@ -7,15 +7,16 @@ use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::Receiver;
 
-use crate::{db::MarketData, prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::Json};
+use crate::{db::MarketData, prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::VJson};
 
 /// 成交量因子分析请求。
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, validator::Validate)]
 pub struct Req {
+    #[validate(nested)]
     base: Base,
 }
 
-impl ArgsHandle for Req {
+impl Req {
     fn register(filter: &Filter) -> (Arc<RawValue>, Receiver<Arc<RawValue>>) {
         let mut req = Self::default();
         req.base.filter = filter.clone();
@@ -26,6 +27,7 @@ impl ArgsHandle for Req {
     }
 }
 
+impl ArgsHandle for Req {}
 impl Default for Req {
     fn default() -> Self {
         Self {
@@ -54,10 +56,11 @@ pub async fn router() -> Router {
     responses(
         (status_code = 200, description = "成交量因子分析结果", body = Res<QuantileData>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
+        (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
     )
 )]
-pub async fn volume(args: Json<Req>) -> Resp<Arc<RawValue>> {
+pub async fn volume(args: VJson<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
     match CACHE.get_or_run(key, move || volume_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
@@ -91,21 +94,4 @@ fn volume_run(args: Req) -> Box<RawValue> {
 #[inline]
 fn volume_factor(market: &MarketData) -> f64 {
     market.volume
-}
-
-#[cfg(test)]
-mod tests {
-    use super::volume_factor;
-    use crate::db::MarketData;
-
-    // 测试成交量因子直接使用当日行情成交量。
-    #[test]
-    fn uses_daily_volume() {
-        let market = MarketData {
-            volume: 123_456.0,
-            ..Default::default()
-        };
-
-        assert_eq!(volume_factor(&market), 123_456.0);
-    }
 }

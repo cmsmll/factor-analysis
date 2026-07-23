@@ -13,31 +13,24 @@ enum_dispatch = "0.3.13"
 hex = "0.4.3"
 percent-encoding = "2.3.2"
 rayon = "1.12.0"
+rustc-hash = "2.1.1"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
-salvo = { git = "https://github.com/salvo-rs/salvo.git", rev = "bca7452deab644935ff50f433cf4f917b0b38960", features = [
-    "cors",
-] }
-salvo-oapi = { git = "https://github.com/salvo-rs/salvo.git", rev = "bca7452deab644935ff50f433cf4f917b0b38960", features = [
-    "swagger-ui",
-    "time",
-] }
-serde = { version = "1.0.228", features = ["derive", "rc"] }
+salvo = { git = "https://github.com/salvo-rs/salvo.git", rev = "bca7452deab644935ff50f433cf4f917b0b38960", features = ["cors"] }
+salvo-oapi = { git = "https://github.com/salvo-rs/salvo.git", rev = "bca7452deab644935ff50f433cf4f917b0b38960", features = ["swagger-ui", "time"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.150", features = ["raw_value"] }
 tempfile = "3.27.0"
-time = { version = "0.3.53", features = [
-    "formatting",
-    "local-offset",
-    "parsing",
-] }
-tokio = { version = "1.52.3", features = ["full"] }
+mimalloc = "0.1.43"
+time = { version = "0.3.53", features = ["formatting", "local-offset", "parsing", "serde"] }
+tokio = { version = "1.53.0", features = ["full"] }
 toml = "1.1.3"
-validator = "0.20.0"
+validator = { version = "0.20.0", features = ["derive"] }
 
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false
-incremental = false
+# opt-level = 3
+# lto = true
+# codegen-units = 1
+# panic = "abort"
+# strip = true
+# debug = false
+# incremental = false

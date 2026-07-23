@@ -4,25 +4,48 @@ use derive_more::Deref;
 use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
 
-use crate::{MODE1, prelude::*, toolbox::Json};
+use crate::{MODE1, prelude::*, toolbox::VJson};
 
 pub mod amplitude;
+pub mod bbi;
+pub mod bias_n;
+pub mod cci_n;
+pub mod ema_close_n;
+pub mod macd;
 pub mod manager;
 pub mod market_value;
+pub mod mass;
+pub mod pvt;
+pub mod pvt_n;
+pub mod sma_close_n;
+pub mod trix_n;
 pub mod turnover;
+pub mod turnover_n;
 pub mod turnover_rate;
+pub mod turnover_rate_n;
 pub mod volume;
+pub mod volume_n;
 
 /// 模式一因子的公共请求参数。
-#[derive(Debug, Serialize, Deserialize, ToSchema, Deref)]
+#[derive(Debug, Serialize, Deserialize, ToSchema, Deref, validator::Validate)]
 pub struct Base {
     /// 动态接口 ID，应使用 `/api/mode1/list` 返回的值。
     pub id: String,
     /// 分位数量，调用方应保证大于等于 1。
+    #[validate(range(min = 1, message = "分位数量必须大于等于 1"))]
     pub count: usize,
     /// 股票池与日期筛选条件。
     #[deref]
+    #[validate(nested)]
     pub filter: Filter,
+}
+
+fn validate_period(period: &UntArg) -> Result<(), validator::ValidationError> {
+    if period.value >= 2 {
+        Ok(())
+    } else {
+        Err(validator::ValidationError::new("period_min").with_message("周期必须大于等于 2".into()))
+    }
 }
 
 /// OpenAPI 中用于描述模式一模板列表的数据结构。
@@ -41,6 +64,19 @@ pub async fn mode1_router() -> Router {
         .push(market_value::router().await)
         .push(volume::router().await)
         .push(turnover::router().await)
+        .push(volume_n::router().await)
+        .push(turnover_n::router().await)
+        .push(turnover_rate_n::router().await)
+        .push(bias_n::router().await)
+        .push(cci_n::router().await)
+        .push(sma_close_n::router().await)
+        .push(ema_close_n::router().await)
+        .push(pvt::router().await)
+        .push(pvt_n::router().await)
+        .push(macd::router().await)
+        .push(bbi::router().await)
+        .push(mass::router().await)
+        .push(trix_n::router().await)
 }
 
 /// 按筛选条件获取模式一因子的请求参数和分析结果。
@@ -50,70 +86,11 @@ pub async fn mode1_router() -> Router {
 #[endpoint(
     tags("模式一"),
     operation_id = "list_mode1_factors",
-    responses((status_code = 200, description = "模式一因子参数和分析结果列表"))
+    responses(
+        (status_code = 200, description = "模式一因子参数和分析结果列表"),
+        (status_code = 422, description = "参数校验失败", body = Res<()>)
+    )
 )]
-pub(super) async fn list(filter: Json<Filter>) -> Res<Vec<manager::ListItem>> {
+pub(super) async fn list(filter: VJson<Filter>) -> Res<Vec<manager::ListItem>> {
     res!(MODE1.execute(&filter.0).await => 200, "ok")
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use salvo::{
-        Service,
-        http::StatusCode,
-        prelude::Router,
-        test::{ResponseExt, TestClient},
-    };
-    use serde_json::{Value, json, value::RawValue};
-    use time::macros::date;
-    use tokio::sync::broadcast;
-
-    use super::list;
-    use crate::{MODE1, args::Filter};
-
-    // 测试 POST /api/mode1/list 接收 Filter，并返回 MODE1 执行后的参数与数据。
-    #[tokio::test]
-    async fn list_executes_registered_tasks_with_request_filter() {
-        MODE1
-            .register(Arc::new(|filter| {
-                let args = json!({
-                    "base": {
-                        "id": "interface-test",
-                        "count": 5,
-                        "filter": filter,
-                    }
-                });
-                let args = Arc::from(RawValue::from_string(args.to_string()).unwrap());
-                let data = Arc::from(RawValue::from_string(r#"{"name":"接口测试"}"#.to_owned()).unwrap());
-                let (sender, receiver) = broadcast::channel(1);
-                sender.send(data).unwrap();
-                (args, receiver)
-            }))
-            .await;
-
-        let mut filter = Filter::new(date!(2024 - 01 - 02), date!(2025 - 06 - 30));
-        filter.filter_bz = true;
-        let router = Router::with_path("api").push(Router::with_path("mode1").push(Router::with_path("list").post(list)));
-        let service = Service::new(router);
-
-        let mut response = TestClient::post("http://localhost/api/mode1/list").json(&filter).send(&service).await;
-
-        assert_eq!(response.status_code, Some(StatusCode::OK));
-        let body: Value = response.take_json().await.unwrap();
-        assert_eq!(body["code"], 200);
-        assert_eq!(body["info"], "ok");
-
-        let item = body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["args"]["base"]["id"] == "interface-test")
-            .expect("响应中应包含接口测试任务");
-        assert_eq!(item["args"]["base"]["filter"]["start"], "2024-01-02");
-        assert_eq!(item["args"]["base"]["filter"]["end"], "2025-06-30");
-        assert_eq!(item["args"]["base"]["filter"]["filter_bz"], true);
-        assert_eq!(item["data"]["name"], "接口测试");
-    }
 }

@@ -1,13 +1,5 @@
-import type { ProfitMode, QuantileData } from '@/types/mode1'
-import {
-  annualizedReturn,
-  average,
-  cumulativeReturn,
-  formatDate,
-  sharpeRatio,
-  sumMaxDrawdown,
-  sumReturn,
-} from '@/utils/factorSeries'
+import type { Profit, ProfitMode, QuantileData } from '@/types/mode1'
+import { average, formatDate, sharpeRatio, sumMaxDrawdown } from '@/utils/factorSeries'
 
 export interface FactorStat {
   label: string
@@ -65,8 +57,13 @@ export function buildDetail(
 
   if (start < 0 || end < start) return { ...emptyDetail, factorName: data.name }
 
+  const profits = getProfits(data, profitMode)
   const datetimes = data.datetime.slice(start, end + 1)
-  const changePercent = sliceSeries(getProfitSeries(data, profitMode), start, end + 1)
+  const changePercent = sliceSeries(
+    profits.map((profit) => profit.source),
+    start,
+    end + 1,
+  )
   const factor = sliceSeries(data.factor, start, end + 1)
   const turnoverRate = sliceSeries(data.turnover_rate ?? [], start, end + 1)
   const quantileCount = Math.max(
@@ -85,20 +82,20 @@ export function buildDetail(
     turnoverRate,
     quantileNames,
     stats: buildStats(datetimes, turnoverRate),
-    metrics: buildMetrics(datetimes, changePercent, factor, turnoverRate, quantileNames),
+    metrics: buildMetrics(datetimes, profits, changePercent, factor, turnoverRate, quantileNames),
   }
 }
 
-function getProfitSeries(data: QuantileData, mode: ProfitMode): number[][] {
+function getProfits(data: QuantileData, mode: ProfitMode): Profit[] {
   switch (mode) {
     case 2:
-      return data.profit2.map((profit) => profit.source)
+      return data.profit2
     case 3:
-      return data.profit3.map((profit) => profit.source)
+      return data.profit3
     case 4:
-      return data.profit4.map((profit) => profit.source)
+      return data.profit4
     default:
-      return data.profit1.map((profit) => profit.source)
+      return data.profit1
   }
 }
 
@@ -113,6 +110,7 @@ function buildStats(datetimes: string[], turnoverRate: number[][]): FactorStat[]
 
 function buildMetrics(
   datetimes: string[],
+  profits: Profit[],
   returns: number[][],
   factor: number[][],
   turnoverRate: number[][],
@@ -121,13 +119,14 @@ function buildMetrics(
   return quantileNames
     .map((quantile, index) => {
       const quantileReturns = returns[index] ?? []
+      const profit = profits[index]
       const drawdown = sumMaxDrawdown(quantileReturns, datetimes)
 
       return {
         quantile,
-        returnRate: sumReturn(quantileReturns),
-        annualizedReturn: annualizedReturn(quantileReturns, calendarDays(datetimes)),
-        nav: cumulativeReturn(quantileReturns) + 1,
+        returnRate: profit?.total_profit ?? 0,
+        annualizedReturn: profit?.annualized_profit ?? 0,
+        nav: profit?.total_net_value ?? 1,
         maxDrawdown: drawdown.value,
         maxDrawdownDate: drawdown.date ? formatDate(drawdown.date) : '--',
         sharpeRatio: sharpeRatio(quantileReturns),
@@ -152,13 +151,6 @@ function findLastIndex(datetimes: string[], timestamp: number): number {
     if (datetime && toTimestamp(datetime) <= timestamp) return index
   }
   return -1
-}
-
-function calendarDays(datetimes: string[]): number {
-  const first = datetimes[0]
-  const last = datetimes[datetimes.length - 1]
-  if (!first || !last) return 0
-  return (toTimestamp(last) - toTimestamp(first)) / 86_400_000
 }
 
 function toTimestamp(datetime: string): number {

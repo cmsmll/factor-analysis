@@ -25,8 +25,18 @@ export interface ModeBase {
   filter: ModeFilter
 }
 
+export type CoreValue = string | number | boolean
+
+export interface CoreArg<T extends CoreValue = CoreValue> {
+  name: string
+  value: T
+}
+
+export type ModeCore = Record<string, CoreArg>
+
 export interface ModeRequest {
   base: ModeBase
+  core?: ModeCore
   [key: string]: unknown
 }
 
