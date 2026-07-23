@@ -6,25 +6,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::{MODE1, prelude::*, toolbox::VJson};
 
-pub mod amplitude;
-pub mod bbi;
-pub mod bias_n;
-pub mod cci_n;
-pub mod ema_close_n;
-pub mod macd;
+pub mod basic;
+pub mod emotion;
 pub mod manager;
-pub mod market_value;
-pub mod mass;
-pub mod pvt;
-pub mod pvt_n;
-pub mod sma_close_n;
-pub mod trix_n;
-pub mod turnover;
-pub mod turnover_n;
-pub mod turnover_rate;
-pub mod turnover_rate_n;
-pub mod volume;
-pub mod volume_n;
+pub mod momentum;
+pub mod risk;
+pub mod technical;
+
+pub use basic::market_value;
+pub use emotion::{turnover, turnover_n, turnover_rate, turnover_rate_n, volume, volume_n};
+pub use momentum::{pvt, pvt_n, trix_n};
+pub use risk::amplitude;
+pub use technical::{bbi, bias_n, cci_n, ema_close_n, macd, mass, sma_close_n};
+
+pub const BASIC_DERIVED: &str = "基础科目及衍生类因子";
+pub const QUALITY: &str = "质量类因子";
+pub const PER_SHARE: &str = "每股指标因子";
+pub const STYLE_RISK: &str = "风险因子";
+pub const EMOTION: &str = "情绪类因子";
+pub const GROWTH: &str = "成长类因子";
+pub const RISK: &str = "风险类因子";
+pub const TECHNICAL: &str = "技术指标因子";
+pub const MOMENTUM: &str = "动量类因子";
 
 /// 模式一因子的公共请求参数。
 #[derive(Debug, Serialize, Deserialize, ToSchema, Deref, validator::Validate)]

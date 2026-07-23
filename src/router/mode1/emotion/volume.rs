@@ -54,7 +54,7 @@ pub async fn router() -> Router {
     tags("模式一"),
     operation_id = "analyze_volume",
     responses(
-        (status_code = 200, description = "成交量因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "成交量因子分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
@@ -70,7 +70,7 @@ pub async fn volume(args: VJson<Req>) -> Resp<Arc<RawValue>> {
 
 fn volume_run(args: Req) -> Box<RawValue> {
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new("成交量因子", "按成交量从低到高分位", args.base.count);
+    let mut qd = Mode1Data::new("成交量因子", "按成交量从低到高分位", super::LABEL, args.base.count);
     let mut items = Vec::with_capacity(df.list.len());
 
     for index in df.index_iter() {
@@ -78,7 +78,7 @@ fn volume_run(args: Req) -> Box<RawValue> {
             if let Some((curr, profit)) = item.data(&index)
                 && curr.filter_st(args.base.filter_st)
             {
-                items.push(TempItem {
+                items.push(Mode1Temp {
                     factor: volume_factor(curr),
                     profit,
                 });

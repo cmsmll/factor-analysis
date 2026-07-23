@@ -77,7 +77,7 @@ pub async fn router() -> Router {
     tags("模式一"),
     operation_id = "analyze_pvt_n",
     responses(
-        (status_code = 200, description = "多日平均价量趋势因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "多日平均价量趋势因子分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
@@ -94,9 +94,10 @@ pub async fn pvt_n(args: VJson<Req>) -> Resp<Arc<RawValue>> {
 fn pvt_n_run(args: Req) -> Box<RawValue> {
     let period = args.core.period.value;
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new(
+    let mut qd = Mode1Data::new(
         format!("价量趋势因子(PVT){period}日平均"),
         format!("PVT_N:=MA(PVT,N); PVT:=(CLOSE-REF(CLOSE,1))/REF(CLOSE,1)*VOLUME; N:={period}"),
+        super::LABEL,
         args.base.count,
     );
     let mut items = Vec::with_capacity(df.list.len());
@@ -110,7 +111,7 @@ fn pvt_n_run(args: Req) -> Box<RawValue> {
                 && let Some(profit) = item.profit.get(curr.index())
                 && let Some(factor) = store.next(pvt_factor(curr.close, prev.close, curr.volume))
             {
-                items.push(TempItem { factor, profit });
+                items.push(Mode1Temp { factor, profit });
             }
         }
         qd.push(index.datetime, &mut items);

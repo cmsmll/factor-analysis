@@ -14,7 +14,7 @@ use time::macros::date;
 use crate::{
     CONFIG, DF, MODE1,
     config::Period,
-    model::{QuantileData, TempItem},
+    router::mode1::manager::{Mode1Data, Mode1Temp},
     reject, res, resolve,
     resp::{Res, Resp},
 };
@@ -83,7 +83,7 @@ async fn hello() -> Resp<&'static str> {
     tags("测试"),
     operation_id = "run_test_analysis",
     responses(
-        (status_code = 200, description = "测试分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "测试分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
     )
 )]
@@ -97,13 +97,13 @@ async fn test() -> Resp<Arc<RawValue>> {
 /// 计算测试接口使用的固定换手率分位数据。
 fn test_run() -> Box<RawValue> {
     let df = DF.range(date!(2025 - 01 - 01), date!(2025 - 12 - 31));
-    let mut qd: QuantileData = QuantileData::new("测试换手率因子", "", 5);
+    let mut qd: Mode1Data = Mode1Data::new("测试换手率因子", "", mode1::EMOTION, 5);
     let mut items = Vec::with_capacity(df.list.len());
 
     for index in df.index_iter() {
         for item in &df.list {
             if let Some((curr, profit)) = item.data(&index) {
-                items.push(TempItem {
+                items.push(Mode1Temp {
                     factor: curr.turnover_rate,
                     profit,
                 });
@@ -181,7 +181,7 @@ mod tests {
             assert!(json.contains(operation), "OpenAPI 缺少操作: {operation}");
         }
         assert!(json.contains("requestBody"));
-        assert!(json.contains("QuantileData"));
+        assert!(json.contains("Mode1Data"));
         assert!(json.contains("415"));
         let document: serde_json::Value = serde_json::from_str(&json).unwrap();
         let paths = document["paths"].as_object().unwrap();

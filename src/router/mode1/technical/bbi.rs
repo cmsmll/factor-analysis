@@ -94,7 +94,7 @@ pub async fn router() -> Router {
     tags("模式一"),
     operation_id = "analyze_bbi",
     responses(
-        (status_code = 200, description = "多空指标因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "多空指标因子分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
@@ -112,9 +112,10 @@ fn bbi_run(args: Req) -> Box<RawValue> {
     let Core { n1, n2, n3, n4 } = args.core;
     let (n1, n2, n3, n4) = (n1.value, n2.value, n3.value, n4.value);
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new(
+    let mut qd = Mode1Data::new(
         "多空指标因子(BBI)",
         format!("BBI:=(MA(CLOSE,N1)+MA(CLOSE,N2)+MA(CLOSE,N3)+MA(CLOSE,N4))/4; FACTOR:=BBI/CLOSE; N1:={n1}; N2:={n2}; N3:={n3}; N4:={n4}"),
+        super::LABEL,
         args.base.count,
     );
     let mut items = Vec::with_capacity(df.list.len());
@@ -126,7 +127,7 @@ fn bbi_run(args: Req) -> Box<RawValue> {
                 && curr.filter_st(args.base.filter_st)
                 && let Some(bbi_value) = store.next(curr.close)
             {
-                items.push(TempItem {
+                items.push(Mode1Temp {
                     factor: dev(bbi_value, curr.close),
                     profit,
                 });

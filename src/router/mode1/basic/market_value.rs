@@ -1,4 +1,4 @@
-//! 价量趋势因子。
+//! 总市值因子接口。
 
 use std::sync::Arc;
 
@@ -7,9 +7,11 @@ use salvo_oapi::{ToSchema, endpoint};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::Receiver;
 
-use crate::{math::dev, prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::VJson};
+use crate::{prelude::*, reject, resolve, resp::Resp, router::mode1::Base, toolbox::VJson};
 
-/// 价量趋势因子分析请求。
+/// 总市值因子分析请求。
+///
+/// 客户端通常先从 `POST /api/mode1/list` 取得默认结构，再按需修改参数。
 #[derive(Debug, Serialize, Deserialize, ToSchema, validator::Validate)]
 pub struct Req {
     #[validate(nested)]
@@ -22,13 +24,12 @@ impl Req {
         req.base.filter = filter.clone();
         let value = Arc::from(req.raw_value());
         let key = req.hashcode();
-        let recv = MODE1.cache.get_or_run(key, move || pvt_run(req));
+        let recv = MODE1.cache.get_or_run(key, move || market_value_run(req));
         (value, recv)
     }
 }
 
 impl ArgsHandle for Req {}
-
 impl Default for Req {
     fn default() -> Self {
         Self {
@@ -41,57 +42,59 @@ impl Default for Req {
     }
 }
 
-/// 注册价量趋势因子。
+/// 注册总市值因子接口。
+///
+/// 动态 `factor_id` 应通过 `POST /api/mode1/list` 获取。
 pub async fn router() -> Router {
     MODE1.register(Arc::new(Req::register)).await;
-    Router::with_path(Req::id()).post(pvt)
+    Router::with_path(Req::id()).post(market_value)
 }
 
-/// 按当日价量趋势值进行分位分析。
+/// 执行总市值因子的分位分析。
+///
+/// # Analysis
+///
+/// 每个交易日直接读取对齐财务数据中的 `total_market` 作为总市值，
+/// 按总市值从低到高切分为 `base.count` 个分位，因子值单位为元。
 #[endpoint(
     tags("模式一"),
-    operation_id = "analyze_pvt",
+    operation_id = "analyze_market_value",
     responses(
-        (status_code = 200, description = "价量趋势因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "总市值因子分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
     )
 )]
-pub async fn pvt(args: VJson<Req>) -> Resp<Arc<RawValue>> {
+pub async fn market_value(args: VJson<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
-    match MODE1.cache.get_or_run(key, move || pvt_run(args.0)).recv().await {
+    match MODE1.cache.get_or_run(key, move || market_value_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }
 }
 
-fn pvt_run(args: Req) -> Box<RawValue> {
+/// 根据总市值计算每日分位数据和四种收益。
+fn market_value_run(args: Req) -> Box<RawValue> {
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new("价量趋势因子(PVT)", "PVT:=(CLOSE-REF(CLOSE,1))/REF(CLOSE,1)*VOLUME", args.base.count);
+    let mut qd = Mode1Data::new("总市值因子", "按总市值从低到高分位", super::LABEL, args.base.count);
     let mut items = Vec::with_capacity(df.list.len());
 
     for index in df.index_iter() {
         for item in &df.list {
-            if let Some(curr) = item.data_ref(&index)
+            if let Some((curr, profit, finance)) = item.data_and_finance(&index)
                 && curr.filter_st(args.base.filter_st)
-                && let Some(prev) = curr.before(1)
-                && let Some(profit) = item.profit.get(curr.index())
             {
-                items.push(TempItem {
-                    factor: pvt_factor(curr.close, prev.close, curr.volume),
+                items.push(Mode1Temp {
+                    factor: finance.total_market,
                     profit,
                 });
             }
         }
         qd.push(index.datetime, &mut items);
-        items.clear();
+        // items.clear();
+        unsafe { items.set_len(0) }
     }
 
     qd.raw_value()
-}
-
-#[inline]
-fn pvt_factor(close: f64, prev_close: f64, volume: f64) -> f64 {
-    dev(close - prev_close, prev_close) * volume
 }

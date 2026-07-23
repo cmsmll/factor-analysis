@@ -1,4 +1,4 @@
-//! 成交额因子N日平均
+//! 换手率因子N日平均。
 
 use std::sync::Arc;
 
@@ -26,9 +26,9 @@ impl Core {
     }
 }
 
-/// 多日均额因子分析请求。
+/// 多日平均换手率因子分析请求。
 ///
-/// `core.period` 表示向前取多少个交易日计算平均成交额，包含当日。
+/// `core.period` 表示向前取多少个交易日计算平均换手率，包含当日。
 #[derive(Debug, Serialize, Deserialize, ToSchema, validator::Validate)]
 pub struct Req {
     #[validate(nested)]
@@ -54,48 +54,49 @@ impl Req {
         req.base.filter = filter.clone();
         let value = Arc::from(req.raw_value());
         let key = req.hashcode();
-        let recv = MODE1.cache.get_or_run(key, move || turnover_n_run(req));
+        let recv = MODE1.cache.get_or_run(key, move || turnover_rate_n_run(req));
         (value, recv)
     }
 }
 
 impl ArgsHandle for Req {}
 
-/// 注册 5 日和 10 日均额因子接口，并加入模式一因子列表。
+/// 注册 5 日和 10 日平均换手率因子接口，并加入模式一因子列表。
 pub async fn router() -> Router {
     MODE1.register(Arc::new(|filter| Req::register(filter, 5))).await;
     MODE1.register(Arc::new(|filter| Req::register(filter, 10))).await;
-    Router::new().push(Router::with_path(Req::id()).post(turnover_n))
+    Router::new().push(Router::with_path(Req::id()).post(turnover_rate_n))
 }
 
-/// 执行多日均额因子的分位分析。
+/// 执行多日平均换手率因子的分位分析。
 ///
-/// 每个交易日按 `core.period` 日平均成交额从低到高排序，切分为 `base.count` 个分位，
-/// 并返回各分位的平均均额、平均换手率和四种平均收益。
+/// 每个交易日按 `core.period` 日平均换手率从低到高排序，切分为 `base.count` 个分位，
+/// 并返回各分位的平均因子值、平均换手率和四种平均收益。
 #[endpoint(
     tags("模式一"),
-    operation_id = "analyze_turnover_n",
+    operation_id = "analyze_turnover_rate_n",
     responses(
-        (status_code = 200, description = "多日均额因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "多日平均换手率因子分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
     )
 )]
-pub async fn turnover_n(args: VJson<Req>) -> Resp<Arc<RawValue>> {
+pub async fn turnover_rate_n(args: VJson<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
-    match MODE1.cache.get_or_run(key, move || turnover_n_run(args.0)).recv().await {
+    match MODE1.cache.get_or_run(key, move || turnover_rate_n_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }
 }
 
-fn turnover_n_run(args: Req) -> Box<RawValue> {
+fn turnover_rate_n_run(args: Req) -> Box<RawValue> {
     let period = args.core.period.value;
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new(
-        format!("成交额因子{period}日平均"),
-        format!("TURNOVER_N:=MA(TURNOVER,N); N:={period}"),
+    let mut qd = Mode1Data::new(
+        format!("换手率因子{period}日平均"),
+        format!("TURNOVER_RATE_N:=MA(TURNOVER_RATE,N); N:={period}"),
+        super::LABEL,
         args.base.count,
     );
     let mut items = Vec::with_capacity(df.list.len());
@@ -105,9 +106,9 @@ fn turnover_n_run(args: Req) -> Box<RawValue> {
         for (item, store) in df.list.iter().zip(store.iter_mut()) {
             if let Some((curr, profit)) = item.data(&index)
                 && curr.filter_st(args.base.filter_st)
-                && let Some(factor) = store.next(curr.turnover)
+                && let Some(factor) = store.next(curr.turnover_rate)
             {
-                items.push(TempItem { factor, profit });
+                items.push(Mode1Temp { factor, profit });
             }
         }
         qd.push(index.datetime, &mut items);

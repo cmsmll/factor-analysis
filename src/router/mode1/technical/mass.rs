@@ -84,7 +84,7 @@ pub async fn router() -> Router {
     tags("模式一"),
     operation_id = "analyze_mass",
     responses(
-        (status_code = 200, description = "梅斯线因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "梅斯线因子分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
@@ -102,9 +102,10 @@ fn mass_run(args: Req) -> Box<RawValue> {
     let Core { n1, n2, m } = args.core;
     let (n1, n2, m) = (n1.value, n2.value, m.value);
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new(
+    let mut qd = Mode1Data::new(
         "梅斯线因子(MASS)",
         format!("MASS:=SUM(MA(HIGH-LOW,N1)/MA(MA(HIGH-LOW,N1),N1),N2); MAMASS:=MA(MASS,M); FACTOR:=MASS; N1:={n1}; N2:={n2}; M:={m}"),
+        super::LABEL,
         args.base.count,
     );
     let mut items = Vec::with_capacity(df.list.len());
@@ -116,7 +117,7 @@ fn mass_run(args: Req) -> Box<RawValue> {
                 && curr.filter_st(args.base.filter_st)
                 && let Some(value) = store.next(curr.high, curr.low)
             {
-                items.push(TempItem { factor: value.mass, profit });
+                items.push(Mode1Temp { factor: value.mass, profit });
             }
         }
         qd.push(index.datetime, &mut items);

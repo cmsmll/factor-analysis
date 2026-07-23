@@ -101,7 +101,7 @@ pub async fn router() -> Router {
     tags("模式一"),
     operation_id = "analyze_macd",
     responses(
-        (status_code = 200, description = "平滑异同移动平均因子分析结果", body = Res<QuantileData>),
+        (status_code = 200, description = "平滑异同移动平均因子分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
         (status_code = 422, description = "参数校验失败", body = Res<()>),
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
@@ -120,11 +120,12 @@ fn macd_run(args: Req) -> Box<RawValue> {
     let long = args.core.long.value;
     let mid = args.core.mid.value;
     let df = DF.filter(&args.base.filter);
-    let mut qd = QuantileData::new(
+    let mut qd = Mode1Data::new(
         "平滑异同移动平均因子(MACD)",
         format!(
             "DIF:=EMA(CLOSE,SHORT)-EMA(CLOSE,LONG); DEA:=EMA(DIF,MID); MACD:=2*(DIF-DEA); FACTOR:=MACD/CLOSE; SHORT:={short}; LONG:={long}; MID:={mid}"
         ),
+        super::LABEL,
         args.base.count,
     );
     let mut items = Vec::with_capacity(df.list.len());
@@ -136,7 +137,7 @@ fn macd_run(args: Req) -> Box<RawValue> {
                 && curr.filter_st(args.base.filter_st)
                 && let Some(macd_value) = store.next(curr.close)
             {
-                items.push(TempItem {
+                items.push(Mode1Temp {
                     factor: dev(macd_value, curr.close),
                     profit,
                 });
