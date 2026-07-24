@@ -16,7 +16,7 @@ pub mod technical;
 pub use basic::market_value;
 pub use emotion::{turnover, turnover_n, turnover_rate, turnover_rate_n, volume, volume_n};
 pub use momentum::{pvt, pvt_n, trix_n};
-pub use risk::amplitude;
+pub use risk::{amplitude, atr_n};
 pub use technical::{bbi, bias_n, cci_n, ema_close_n, macd, mass, sma_close_n};
 
 pub const BASIC_DERIVED: &str = "基础科目及衍生类因子";
@@ -61,7 +61,7 @@ pub struct Mode1Template {
 /// 构建模式一的路由树。
 pub async fn mode1_router() -> Router {
     Router::with_path("mode1")
-        .push(Router::with_path("list").post(list))
+        .push(atr_n::router().await)
         .push(turnover_rate::router().await)
         .push(amplitude::router().await)
         .push(market_value::router().await)
