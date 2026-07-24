@@ -105,11 +105,10 @@ fn pvt_n_run(args: Req) -> Box<RawValue> {
 
     for index in df.index_iter() {
         for (item, store) in df.list.iter().zip(store.iter_mut()) {
-            if let Some(curr) = item.data_ref(&index)
+            if let Some((curr, profit)) = item.data(&index)
                 && curr.filter_st(args.base.filter_st)
-                && let Some(prev) = curr.before(1)
-                && let Some(profit) = item.profit.get(curr.index())
-                && let Some(factor) = store.next(pvt_factor(curr.close, prev.close, curr.volume))
+                && let Some(prev1) = item.before(&index, 1)
+                && let Some(factor) = store.next(pvt_factor(curr.close, prev1.close, curr.volume))
             {
                 items.push(Mode1Temp { factor, profit });
             }

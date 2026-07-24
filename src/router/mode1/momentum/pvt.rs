@@ -73,13 +73,12 @@ fn pvt_run(args: Req) -> Box<RawValue> {
 
     for index in df.index_iter() {
         for item in &df.list {
-            if let Some(curr) = item.data_ref(&index)
+            if let Some((curr, profit)) = item.data(&index)
                 && curr.filter_st(args.base.filter_st)
-                && let Some(prev) = curr.before(1)
-                && let Some(profit) = item.profit.get(curr.index())
+                && let Some(prev1) = item.before(&index, 1)
             {
                 items.push(Mode1Temp {
-                    factor: pvt_factor(curr.close, prev.close, curr.volume),
+                    factor: pvt_factor(curr.close, prev1.close, curr.volume),
                     profit,
                 });
             }

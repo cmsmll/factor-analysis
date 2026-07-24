@@ -53,7 +53,7 @@ impl Req {
         req.base.filter = filter.clone();
         let value = Arc::from(req.raw_value());
         let key = req.hashcode();
-        let recv = MODE1.cache.get_or_run(key, move || volatility_n_run(req));
+        let recv = MODE1.cache.get_or_run(key, move || atr_n_run(req));
         (value, recv)
     }
 }
@@ -79,7 +79,7 @@ pub async fn router() -> Router {
     MODE1.register(Arc::new(|filter| Req::register(filter, 5))).await;
     MODE1.register(Arc::new(|filter| Req::register(filter, 10))).await;
     MODE1.register(Arc::new(|filter| Req::register(filter, 20))).await;
-    Router::new().push(Router::with_path(Req::id()).post(volatility_n))
+    Router::new().push(Router::with_path(Req::id()).post(atr_n))
 }
 
 /// 执行波动率因子的分位分析。
@@ -112,7 +112,7 @@ pub async fn router() -> Router {
 /// 由提取器返回 `415`；后台分析任务失败时返回 `400` 和 `"获取数据失败"`。
 #[endpoint(
     tags("模式一"),
-    operation_id = "analyze_volatility_n",
+    operation_id = "analyze_atr_n",
     responses(
         (status_code = 200, description = "波动率因子分析结果", body = Res<Mode1Data>),
         (status_code = 400, description = "分析任务失败", body = Res<()>),
@@ -120,9 +120,9 @@ pub async fn router() -> Router {
         (status_code = 415, description = "Content-Type 或 JSON 请求体错误", body = Res<()>),
     )
 )]
-pub async fn volatility_n(args: VJson<Req>) -> Resp<Arc<RawValue>> {
+pub async fn atr_n(args: VJson<Req>) -> Resp<Arc<RawValue>> {
     let key = args.0.hashcode();
-    match MODE1.cache.get_or_run(key, move || volatility_n_run(args.0)).recv().await {
+    match MODE1.cache.get_or_run(key, move || atr_n_run(args.0)).recv().await {
         Ok(res) => resolve!(res => 200, "ok"),
         Err(_) => reject!(400, "获取数据失败"),
     }
@@ -133,7 +133,7 @@ pub async fn volatility_n(args: VJson<Req>) -> Resp<Arc<RawValue>> {
 /// 每只股票使用独立的 SMA 状态机累积 TR。仅当 SMA 预热完成后才参与当日排序。
 /// 四种收益依次为：当日收盘到下一日收盘、下一日开盘到收盘、下一日开盘到下下日开盘、
 /// 下一日开盘到下下日收盘。
-fn volatility_n_run(args: Req) -> Box<RawValue> {
+fn atr_n_run(args: Req) -> Box<RawValue> {
     let period = args.core.period.value;
     let df = DF.filter(&args.base.filter);
     let mut qd = Mode1Data::new(
@@ -147,12 +147,11 @@ fn volatility_n_run(args: Req) -> Box<RawValue> {
 
     for index in df.index_iter() {
         for (store, item) in stores.iter_mut().zip(df.list.iter()) {
-            if let Some(ref_) = item.data_ref(&index)
-                && ref_.filter_st(args.base.filter_st)
+            if let Some((curr, profit)) = item.data(&index)
+                && curr.filter_st(args.base.filter_st)
+                && let Some(prev1) = item.before(&index, 1)
             {
-                let profit = &item.profit[ref_.index()];
-                let prev_close = ref_.before(1).map_or(ref_.close, |prev| prev.close);
-                let tr = true_range(ref_.high, ref_.low, prev_close);
+                let tr = true_range(curr.high, curr.low, prev1.close);
                 if let Some(factor) = store.next(tr) {
                     items.push(Mode1Temp { factor, profit });
                 }

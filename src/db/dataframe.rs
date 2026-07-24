@@ -1,6 +1,5 @@
 use std::{collections::HashSet, sync::Arc};
 
-use derive_more::Deref;
 use rustc_hash::FxHashMap;
 use time::Date;
 
@@ -131,40 +130,9 @@ pub struct Contract {
     pub profit: Vec<[f64; 5]>,
 }
 
-#[derive(Debug, Deref)]
-pub struct MarketDataRef<'a> {
-    index: usize,
-    #[deref]
-    value: &'a MarketData,
-    inner: &'a [MarketData],
-}
-
-impl MarketDataRef<'_> {
-    pub fn index(&self) -> usize {
-        self.index
-    }
-
-    pub fn before(&self, n: usize) -> Option<&MarketData> {
-        self.inner.get(self.index.checked_sub(n)?)
-    }
-
-    pub fn after(&self, n: usize) -> Option<&MarketData> {
-        self.inner.get(self.index.checked_add(n)?)
-    }
-}
-
 impl Contract {
     pub fn index(&self, index: &Index) -> Option<usize> {
         self.table.get(&index.datetime).copied()
-    }
-
-    pub fn data_ref(&self, i: &Index) -> Option<MarketDataRef<'_>> {
-        let index = self.index(i)?;
-        Some(MarketDataRef {
-            index,
-            value: self.market.get(index)?,
-            inner: self.market.as_slice(),
-        })
     }
 
     pub fn data(&self, i: &Index) -> Option<(&MarketData, &[f64; 5])> {
@@ -172,6 +140,21 @@ impl Contract {
         // 时间表能找到索引必然在范围内
         let market = unsafe { self.market.get_unchecked(index) };
         Some((market, self.profit.get(index)?))
+    }
+
+    pub fn before(&self, index: &Index, days: usize) -> Option<&MarketData> {
+        let index = self.index(index)?.checked_sub(days)?;
+        self.market.get(index)
+    }
+
+    pub fn before_and_profit(&self, index: &Index, days: usize) -> Option<(&MarketData, &[f64; 5])> {
+        let index = self.index(index)?.checked_sub(days)?;
+        Some((self.market.get(index)?, self.profit.get(index)?))
+    }
+
+    pub fn after(&self, index: &Index, days: usize) -> Option<(&MarketData, &[f64; 5])> {
+        let index = self.index(index)?.checked_add(days)?;
+        Some((self.market.get(index)?, self.profit.get(index)?))
     }
 
     pub fn data_and_finance(&self, i: &Index) -> Option<(&MarketData, &[f64; 5], &Finance)> {
@@ -243,9 +226,9 @@ mod tests {
         }
     }
 
-    // 测试行情引用复用首次查询得到的本地索引访问前后数据。
+    // 测试 before 和 before_and_profit 返回历史数据。
     #[test]
-    fn market_data_ref_uses_local_index_for_neighbors() {
+    fn before_returns_historical_data() {
         let mut contract = contract("000001", "上海证券交易所", "行业一", "沪深指数");
         let contract = Arc::get_mut(&mut contract).unwrap();
         contract.market = Arc::new(
@@ -264,18 +247,7 @@ mod tests {
                 })
                 .collect(),
         );
-        contract.finance = Arc::new(
-            (1..=3)
-                .map(|day| Finance {
-                    datetime: Date::parse(&format!("2025-01-{day:02}"), &Iso8601::DATE).unwrap(),
-                    total_market: f64::from(day) * 100.0,
-                    total_shares: 0.0,
-                    float_shares: 0.0,
-                    float_market: 0.0,
-                })
-                .collect(),
-        );
-        contract.profit = vec![[0.1, 0.2, 0.3, 0.4, 0.5]];
+        contract.profit = vec![[0.1, 0.2, 0.3, 0.4, 0.5]; 3];
         contract.table = contract
             .market
             .iter()
@@ -283,25 +255,23 @@ mod tests {
             .map(|(index, market)| (market.datetime, index))
             .collect::<FxHashMap<_, _>>();
 
-        let current = contract.data_ref(&Index::new(1, date(2))).unwrap();
+        let index = Index::new(1, date(2));
 
-        assert_eq!(current.index(), 1);
-        assert_eq!(current.close, 2.0);
-        assert_eq!(current.before(1).unwrap().close, 1.0);
-        assert_eq!(current.after(1).unwrap().close, 3.0);
-        assert!(current.before(2).is_none());
-        assert!(current.after(2).is_none());
-
-        let first = Index::new(0, date(1));
-        let (market, profit) = contract.data(&first).unwrap();
-        assert_eq!(market.close, 1.0);
+        let (market, profit) = contract.data(&index).unwrap();
+        assert_eq!(market.close, 2.0);
         assert_eq!(profit, &[0.1, 0.2, 0.3, 0.4, 0.5]);
 
-        let (market, profit, finance) = contract.data_and_finance(&first).unwrap();
-        assert_eq!(market.close, 1.0);
-        assert_eq!(profit, &[0.1, 0.2, 0.3, 0.4, 0.5]);
-        assert_eq!(finance.total_market, 100.0);
-        assert!(contract.data(&Index::new(1, date(2))).is_none());
+        let prev = contract.before(&index, 1).unwrap();
+        assert_eq!(prev.close, 1.0);
+        assert!(contract.before(&index, 2).is_none());
+
+        let (prev_market, prev_profit) = contract.before_and_profit(&index, 1).unwrap();
+        assert_eq!(prev_market.close, 1.0);
+        assert_eq!(prev_profit, &[0.1, 0.2, 0.3, 0.4, 0.5]);
+
+        let next = contract.after(&index, 1).unwrap();
+        assert_eq!(next.0.close, 3.0);
+        assert_eq!(next.1, &[0.1, 0.2, 0.3, 0.4, 0.5]);
     }
 
     // 测试板块和指数条件使用并集，任意一项匹配即可保留合约。
